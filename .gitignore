@@ -1,0 +1,12 @@
+# Local scratch copies and archives — not part of the project (see AGENTS.md).
+/front (Copy)/
+/front (Merge Attempt)/
+/Arabic RTL Real Estate App (5)/
+/Arabic RTL Real Estate App (5).zip
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp

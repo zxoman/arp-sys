@@ -1,0 +1,762 @@
+/* UI kit styles not covered by src/index.css. Every color, radius and easing comes from its tokens.
+   Lives in the components layer, so Tailwind utilities still override it. Reduced motion is
+   handled globally by src/index.css (all animations/transitions off). */
+@layer components {
+  /* ---------------------------------------------------------------- LiquidTabs */
+  .kit-tabs {
+    position: relative;
+    display: flex;
+    gap: 2px;
+    overflow-x: auto;
+    scrollbar-width: none;
+    border-block-end: 1px solid var(--hairline);
+  }
+  .kit-tabs::-webkit-scrollbar {
+    display: none;
+  }
+  .kit-tab {
+    position: relative;
+    z-index: 1;
+    display: inline-flex;
+    flex-shrink: 0;
+    align-items: center;
+    gap: 8px;
+    height: 44px;
+    padding-inline: 16px;
+    border: 0;
+    background: transparent;
+    color: var(--text-2);
+    font-size: 14px;
+    font-weight: 600;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+  .kit-tab:hover:not(:disabled) {
+    color: var(--text);
+  }
+  .kit-tab[aria-selected='true'] {
+    color: var(--primary);
+  }
+  .dark .kit-tab[aria-selected='true'] {
+    color: #a5b4fc;
+  }
+  .kit-tab:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
+  }
+  .kit-tab-count {
+    display: inline-grid;
+    place-items: center;
+    min-width: 22px;
+    height: 20px;
+    padding-inline: 6px;
+    border-radius: 9999px;
+    background: var(--neutral-soft);
+    color: var(--text-2);
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+  }
+  .kit-tab[aria-selected='true'] .kit-tab-count {
+    background: var(--primary-soft);
+    color: inherit;
+  }
+  /* Ink + pill are positioned from the active tab's offsetLeft (a physical coordinate in both
+     directions), so they anchor to the physical left on purpose. 100px base width, scaled. */
+  .kit-tabs-ink,
+  .kit-tabs-pill {
+    position: absolute;
+    left: 0;
+    width: 100px;
+    pointer-events: none;
+    transform-origin: left center;
+    opacity: 0;
+  }
+  .kit-tabs-ink {
+    bottom: -1px;
+    z-index: 2;
+    height: 3px;
+    border-radius: 9999px;
+    background: linear-gradient(90deg, var(--primary), var(--primary-2));
+  }
+  .kit-tabs-pill {
+    top: 6px;
+    height: 32px;
+    border-radius: var(--r-ctl);
+    background: var(--primary-soft);
+  }
+  .kit-tabs[data-ready='true'] .kit-tabs-ink,
+  .kit-tabs[data-ready='true'] .kit-tabs-pill {
+    opacity: 1;
+    transition:
+      transform 0.5s var(--spring),
+      opacity 0.2s ease;
+  }
+  .kit-tabs[data-ready='true'] .kit-tabs-pill {
+    opacity: 0.75;
+    transition-duration: 0.6s, 0.2s;
+  }
+
+  /* ---------------------------------------------------------------- StatusChip / AnimatedNumber */
+  .kit-chip-sm {
+    height: 20px;
+    padding-inline: 8px;
+    gap: 5px;
+    font-size: 11px;
+  }
+  .kit-chip-count {
+    margin-inline-start: 2px;
+    padding-inline: 6px;
+    border-radius: 9999px;
+    background: color-mix(in srgb, currentColor 14%, transparent);
+    font-variant-numeric: tabular-nums;
+  }
+  .kit-num {
+    display: inline-block;
+    font-variant-numeric: tabular-nums;
+  }
+  .kit-num-in {
+    display: inline-block;
+    animation: kit-num-in 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+
+  /* ---------------------------------------------------------------- Fields */
+  .kit-field-btn {
+    display: inline-grid;
+    flex-shrink: 0;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text-3);
+    cursor: pointer;
+  }
+  .kit-field-btn:hover:not(:disabled) {
+    background: var(--primary-soft);
+    color: var(--primary);
+  }
+  .kit-field-btn:disabled {
+    cursor: not-allowed;
+    opacity: 0.4;
+  }
+  .kit-field-sep {
+    width: 1px;
+    height: 20px;
+    background: var(--hairline);
+  }
+  .kit-tabular {
+    font-variant-numeric: tabular-nums;
+  }
+  .kit-count {
+    position: absolute;
+    inset-inline-end: 12px;
+    inset-block-end: 6px;
+    color: var(--text-3);
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+    pointer-events: none;
+  }
+  .kit-count[data-over='true'] {
+    color: var(--danger);
+  }
+
+  /* Popovers (Combobox list, DatePicker calendar) are portaled with fixed positioning.
+     Corner radius comes from a utility class so it beats `.glass-float` regardless of CSS order. */
+  .kit-popover {
+    position: fixed;
+    z-index: 80;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    animation: kit-pop-down 0.24s var(--spring) both;
+    transform-origin: top center;
+    background: var(--menu-bg);
+    border: 1px solid var(--menu-border);
+    color: var(--text);
+  }
+  .kit-popover.glass-float {
+    background: var(--menu-bg);
+    border-color: var(--menu-border);
+  }
+  .kit-popover[data-side='top'] {
+    animation-name: kit-pop-up;
+    transform-origin: bottom center;
+  }
+  .kit-option {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 40px;
+    padding-block: 6px;
+    padding-inline: 10px;
+    border-radius: 10px;
+    color: var(--text);
+    cursor: pointer;
+  }
+  .kit-option:hover,
+  .kit-option[data-active='true'] {
+    background: var(--menu-hover);
+  }
+  .kit-option[aria-selected='true'] {
+    background: var(--menu-selected);
+    color: var(--menu-selected-text);
+    font-weight: 700;
+  }
+  .kit-option[aria-selected='true']:hover,
+  .kit-option[aria-selected='true'][data-active='true'] {
+    background: var(--menu-selected);
+  }
+  .kit-option[aria-disabled='true'] {
+    cursor: not-allowed;
+    opacity: 0.45;
+  }
+  .kit-option mark {
+    background: transparent;
+    color: var(--primary);
+    font-weight: 700;
+  }
+
+  .kit-cal {
+    width: 300px;
+    padding: 12px;
+  }
+  .kit-cal-grid {
+    display: grid;
+    grid-template-columns: repeat(7, minmax(0, 1fr));
+    gap: 2px;
+  }
+  .kit-cal-day {
+    height: 36px;
+    border: 0;
+    border-radius: 10px;
+    background: transparent;
+    color: var(--text);
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
+    cursor: pointer;
+  }
+  .kit-cal-day:hover:not(:disabled),
+  .kit-cal-day[data-active='true'] {
+    background: var(--menu-hover);
+  }
+  .kit-cal-day[data-outside='true'] {
+    color: var(--text-3);
+    opacity: 0.6;
+  }
+  .kit-cal-day[data-today='true'] {
+    box-shadow: inset 0 0 0 1.5px var(--primary);
+    font-weight: 700;
+  }
+  .kit-cal-day[aria-selected='true'] {
+    background: linear-gradient(135deg, var(--primary), var(--primary-2));
+    color: #fff;
+    font-weight: 700;
+    opacity: 1;
+  }
+  .kit-cal-day:disabled {
+    cursor: not-allowed;
+    opacity: 0.28;
+  }
+
+  /* ---------------------------------------------------------------- Overlays */
+  .kit-layer {
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+  }
+  .kit-layer[data-state='closing'] {
+    pointer-events: none;
+  }
+  .kit-layer > .backdrop {
+    animation: kit-fade-in 0.2s ease-out both;
+  }
+  .kit-layer[data-state='closing'] > .backdrop {
+    animation: kit-fade-out 0.2s ease-in both;
+  }
+  .kit-modal-layer {
+    display: grid;
+    place-items: center;
+    padding: 24px;
+  }
+  .glass-float.kit-modal,
+  .glass-float.kit-drawer {
+    background: var(--surface-overlay);
+    border: 1px solid var(--menu-border);
+  }
+  .kit-modal {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    max-height: calc(100vh - 48px);
+    animation: kit-modal-in 0.46s var(--spring) both;
+  }
+  .kit-layer[data-state='closing'] .kit-modal {
+    animation: kit-modal-out 0.2s ease-in both;
+  }
+  /* The drawer docks to the inline-end edge (left in RTL) and slides in from it. It extends 48px
+     past the edge so the spring overshoot never reveals a gap. The two-class selector outranks
+     `.glass-float`'s radius whichever stylesheet loads first. */
+  .kit-layer .kit-drawer {
+    --kit-drawer-from: -100%;
+    --kit-drawer-w: 480px;
+    position: absolute;
+    inset-block: 0;
+    inset-inline-end: -48px;
+    display: flex;
+    flex-direction: column;
+    width: calc(min(var(--kit-drawer-w), 100vw) + 48px);
+    padding-inline-end: 48px;
+    border-radius: 0;
+    border-start-start-radius: var(--r-card);
+    border-end-start-radius: var(--r-card);
+    animation: kit-drawer-in 0.55s cubic-bezier(0.32, 1.25, 0.5, 1) both;
+  }
+  [dir='ltr'] .kit-layer .kit-drawer {
+    --kit-drawer-from: 100%;
+  }
+  .kit-layer .kit-drawer-sm {
+    --kit-drawer-w: 380px;
+  }
+  .kit-layer .kit-drawer-lg {
+    --kit-drawer-w: 640px;
+  }
+  .kit-layer[data-state='closing'] .kit-drawer {
+    animation: kit-drawer-out 0.24s cubic-bezier(0.4, 0, 1, 1) both;
+  }
+
+  .kit-toasts {
+    position: fixed;
+    z-index: 70;
+    inset-block-end: 20px;
+    inset-inline-end: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    width: min(380px, calc(100vw - 40px));
+    pointer-events: none;
+  }
+  .kit-toast {
+    position: relative;
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    overflow: hidden;
+    padding-block: 14px;
+    padding-inline: 16px 10px;
+    pointer-events: auto;
+  }
+  .kit-toast[data-state='closing'] {
+    animation: kit-toast-out 0.2s ease-in both;
+  }
+  .kit-toast-icon {
+    display: grid;
+    flex-shrink: 0;
+    place-items: center;
+    width: 32px;
+    height: 32px;
+    border-radius: 10px;
+    color: var(--kit-tone);
+    background: var(--kit-tone-soft);
+  }
+  .kit-toast[data-tone='success'] {
+    --kit-tone: var(--success);
+    --kit-tone-soft: var(--success-soft);
+  }
+  .kit-toast[data-tone='danger'] {
+    --kit-tone: var(--danger);
+    --kit-tone-soft: var(--danger-soft);
+  }
+  .kit-toast[data-tone='warning'] {
+    --kit-tone: var(--warning);
+    --kit-tone-soft: var(--warning-soft);
+  }
+  .kit-toast[data-tone='info'] {
+    --kit-tone: var(--primary);
+    --kit-tone-soft: var(--primary-soft);
+  }
+  .kit-toast-progress {
+    position: absolute;
+    inset-inline: 0;
+    inset-block-end: 0;
+    height: 2px;
+    background: var(--kit-tone);
+    opacity: 0.55;
+    transform-origin: left center;
+    animation: kit-shrink var(--kit-toast-ms, 5s) linear both;
+  }
+  [dir='rtl'] .kit-toast-progress {
+    transform-origin: right center;
+  }
+  .kit-toast:hover .kit-toast-progress,
+  .kit-toast:focus-within .kit-toast-progress {
+    animation-play-state: paused;
+  }
+
+  /* ---------------------------------------------------------------- DataTable */
+  .kit-table-scroll {
+    position: relative;
+    max-width: 100%;
+    min-width: 0;
+    overflow: auto;
+    overscroll-behavior: contain;
+    border: 1px solid var(--hairline);
+    border-radius: var(--r-ctl);
+    scrollbar-width: thin;
+  }
+  .kit-table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+  }
+  .kit-table[data-virtual='true'] {
+    table-layout: fixed;
+  }
+  .kit-table th {
+    position: sticky;
+    inset-block-start: 0;
+    z-index: 2;
+    height: 46px;
+    padding-block: 0;
+    padding-inline: 14px;
+    border-block-end: 1px solid var(--hairline);
+    background: var(--menu-bg);
+    color: var(--text);
+    font-weight: 800;
+    white-space: nowrap;
+  }
+  .kit-table td {
+    font-variant-numeric: tabular-nums;
+    color: var(--text);
+    padding-block: 10px;
+    padding-inline: 14px;
+    border-block-end: 1px solid var(--hairline);
+    white-space: nowrap;
+  }
+  .kit-table[data-virtual='true'] td {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    padding-block: 0;
+  }
+  .kit-table tbody tr:last-child td {
+    border-block-end: 0;
+  }
+  .kit-table[data-plain] tbody tr:nth-child(even) td,
+  .kit-table tr[data-stripe='true'] td {
+    background: color-mix(in srgb, var(--text) 2.2%, transparent);
+  }
+  .kit-table tr.kit-row:hover td {
+    background: color-mix(in srgb, var(--primary) 8%, transparent);
+  }
+  .kit-table tr.kit-row[data-clickable='true'] {
+    cursor: pointer;
+  }
+  .kit-table tr.kit-row.kit-row-down td {
+    background: var(--warning-soft);
+  }
+  .kit-table tr.kit-row.kit-row-down:hover td {
+    background: color-mix(in srgb, var(--warning) 22%, transparent);
+  }
+  .kit-table tr.kit-spacer td {
+    padding: 0;
+    border: 0;
+    background: transparent;
+  }
+  .kit-table .kit-col-actions {
+    width: 1%;
+    text-align: end;
+  }
+  /* Opt-in column helpers: compact padding, two-line headers, sticky first column. */
+  .kit-table th.kit-th-wrap {
+    height: auto;
+    padding-block: 6px;
+    white-space: normal;
+    line-height: 1.35;
+    vertical-align: middle;
+  }
+  .kit-table th.kit-th-wrap .kit-th-btn {
+    text-align: inherit;
+  }
+  .kit-table th.kit-compact,
+  .kit-table td.kit-compact {
+    padding-inline: 10px;
+  }
+  .kit-table td.kit-compact {
+    padding-block: 8px;
+  }
+  .kit-table td.kit-num {
+    display: table-cell;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .kit-table th.kit-sticky,
+  .kit-table td.kit-sticky {
+    position: sticky;
+    inset-inline-start: 0;
+    background: var(--menu-bg);
+  }
+  .kit-table th.kit-sticky {
+    z-index: 4;
+  }
+  .kit-table td.kit-sticky {
+    z-index: 1;
+    box-shadow: inset -1px 0 0 var(--hairline);
+  }
+  .kit-table tr[data-stripe='true'] td.kit-sticky {
+    background: linear-gradient(color-mix(in srgb, var(--text) 2.2%, transparent), color-mix(in srgb, var(--text) 2.2%, transparent)), var(--menu-bg);
+  }
+  .kit-table tr.kit-row:hover td.kit-sticky {
+    background: linear-gradient(color-mix(in srgb, var(--primary) 8%, transparent), color-mix(in srgb, var(--primary) 8%, transparent)), var(--menu-bg);
+  }
+  .kit-th-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+  }
+  .kit-th-btn:hover {
+    color: var(--text);
+  }
+  .kit-sort-icon {
+    opacity: 0.35;
+    transition:
+      transform 0.3s var(--spring),
+      opacity 0.15s ease;
+  }
+  th[aria-sort='ascending'] .kit-sort-icon,
+  th[aria-sort='descending'] .kit-sort-icon {
+    opacity: 1;
+    color: var(--primary);
+  }
+  th[aria-sort='descending'] .kit-sort-icon {
+    transform: rotate(180deg);
+  }
+  .kit-pager {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .kit-page {
+    min-width: 34px;
+    height: 34px;
+    padding-inline: 8px;
+    border: 0;
+    border-radius: 10px;
+    background: transparent;
+    color: var(--text-2);
+    font-size: 13px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    cursor: pointer;
+    transition: transform 0.2s var(--spring);
+  }
+  .kit-page[data-glyph='true'] {
+    font-size: 17px;
+    line-height: 1;
+  }
+  .kit-page:hover:not(:disabled) {
+    background: var(--primary-soft);
+    color: var(--primary);
+  }
+  .kit-page:active:not(:disabled) {
+    transform: scale(0.94);
+  }
+  .kit-page[aria-current='page'] {
+    background: linear-gradient(135deg, var(--primary), var(--primary-2));
+    color: #fff;
+    box-shadow: 0 6px 14px -6px rgba(79, 70, 229, 0.6);
+  }
+  .kit-page:disabled {
+    cursor: not-allowed;
+    opacity: 0.3;
+  }
+  .kit-page-gap {
+    min-width: 20px;
+    color: var(--text-3);
+    text-align: center;
+  }
+
+  /* ---------------------------------------------------------------- Low-performance devices */
+  .low-perf .kit-table th {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    background: var(--glass-solid);
+  }
+}
+
+@keyframes kit-num-in {
+  from {
+    opacity: 0;
+    transform: translateY(0.3em);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes kit-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes kit-fade-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+@keyframes kit-pop-down {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+@keyframes kit-pop-up {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+@keyframes kit-modal-in {
+  from {
+    opacity: 0;
+    transform: translateY(18px) scale(0.94);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+@keyframes kit-modal-out {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(10px) scale(0.97);
+  }
+}
+@keyframes kit-drawer-in {
+  from {
+    transform: translateX(var(--kit-drawer-from));
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+@keyframes kit-drawer-out {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(var(--kit-drawer-from));
+  }
+}
+@keyframes kit-toast-out {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(8px) scale(0.96);
+  }
+}
+@keyframes kit-shrink {
+  from {
+    transform: scaleX(1);
+  }
+  to {
+    transform: scaleX(0);
+  }
+}
+
+@layer components {
+  .kit-record-panel {
+    position: fixed;
+    z-index: 40;
+    inset-block: 0;
+    inset-inline-end: 0;
+    display: flex;
+    flex-direction: column;
+    width: min(32rem, 100vw);
+    background: var(--surface-overlay);
+    border-inline-start: 1px solid var(--menu-border);
+    box-shadow: var(--shadow-raised);
+    animation: kit-record-in 0.38s cubic-bezier(0.32, 1.1, 0.5, 1) both;
+  }
+  .kit-record-panel[data-closing='true'] {
+    animation: kit-record-out 0.2s ease-in both;
+  }
+  .kit-record-sec > summary {
+    list-style: none;
+    cursor: pointer;
+  }
+  .kit-record-sec > summary::-webkit-details-marker {
+    display: none;
+  }
+  .kit-record-sec:not([open]) > summary .kit-record-chev {
+    transform: rotate(90deg);
+  }
+  .kit-record-mini {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: var(--fs-label);
+  }
+  .kit-record-mini th {
+    padding: 6px 8px;
+    text-align: start;
+    font-weight: var(--fw-th, 700);
+    color: var(--text-2);
+    border-block-end: 1px solid var(--hairline);
+    white-space: nowrap;
+  }
+  .kit-record-mini td {
+    padding: 7px 8px;
+    border-block-end: 1px solid var(--hairline);
+  }
+  .kit-record-mini tr:last-child td {
+    border-block-end: 0;
+  }
+  .kit-table tr.kit-row[data-active='true'] td {
+    background: color-mix(in srgb, var(--primary) 14%, transparent);
+  }
+}
+@keyframes kit-record-in {
+  from {
+    transform: translateX(var(--rp-from, -100%));
+    opacity: 0.6;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+@keyframes kit-record-out {
+  to {
+    transform: translateX(var(--rp-from, -100%));
+    opacity: 0;
+  }
+}
+[dir='ltr'] .kit-record-panel {
+  --rp-from: 100%;
+}

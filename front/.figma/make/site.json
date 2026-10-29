@@ -1,0 +1,12 @@
+{
+  "title": "نظام الحركة العقارية",
+  "description": "An Arabic RTL real estate management app offering intuitive property tracking and status updates with a sleek, user-friendly interface optimized for performance.",
+  "language": "ar",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}

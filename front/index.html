@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="<!-- figma:lang -->" dir="rtl">
+  <head>
+    <!-- figma:head-start -->
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Codex Control</title>
+    <link rel="icon" type="image/jpeg" href="/codex-logo.jpg" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <script>
+      // Runs before first paint: flags low-end devices and restores the saved theme.
+      ;(function () {
+        var root = document.documentElement
+        var nav = navigator
+        if (nav.hardwareConcurrency <= 4 || nav.deviceMemory <= 4) root.classList.add('low-perf')
+        try {
+          if (localStorage.getItem('theme') === 'dark') root.classList.add('dark')
+        } catch (e) {}
+      })()
+    </script>
+    <!-- figma:head-end -->
+  </head>
+  <body>
+    <!-- figma:body-start -->
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+    <!-- figma:body-end -->
+  </body>
+</html>
