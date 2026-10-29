@@ -28,6 +28,9 @@ must stay easy to change and be listed in `docs/DEFAULTS.md`.
 - Install: `/opt/lampp/bin/php /tmp/opencode/composer install`
 - Migrate + seed: `/opt/lampp/bin/php artisan migrate --seed`
 - Tests: `/opt/lampp/bin/php artisan test` (or `/opt/lampp/bin/php vendor/bin/pest`)
+- Demo data (GitHub Actions preview only): `php artisan db:seed --class=DemoSeeder` — needs an empty
+  database; it creates 2 buildings, 6 units, 4 clients, 3 contracts and 1 reservation through the normal
+  services. Never run it against real data.
 - Single test: `/opt/lampp/bin/php vendor/bin/pest --filter=Name`
 - System test: `/opt/lampp/bin/php artisan system:test --quick` | `--full`
 - Lint/format: `/opt/lampp/bin/php vendor/bin/pint`

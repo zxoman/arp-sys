@@ -45,6 +45,22 @@ npx tsc --noEmit
 npm run build
 ```
 
+## عرض مؤقت من GitHub Actions
+
+`.github/workflows/demo.yml` يشغّل المشروع كاملًا داخل الـjob ويفتح رابطًا عامًا مؤقتًا:
+
+1. Actions → **Demo preview (temporary public URL)** → **Run workflow** (يمكن تحديد المدة بالدقائق، والحد الأقصى 350).
+2. يقرأ الرابط من ملخّص التشغيل (Summary) أو من سجل خطوة «Open the public tunnel».
+3. الدخول: `admin` / `password123` — بيانات تجريبية فقط.
+
+كيف يعمل: يثبّت PHP 8.2 وNode 22، ينشئ قاعدة **SQLite** مؤقتة (`migrate --seed` + `DemoSeeder`)، يشغّل
+`php artisan serve` و`pnpm run dev`، ثم يفتح نفق Cloudflare (`trycloudflare.com`) إلى الواجهة، التي تمرّر
+`/api` إلى الخادم على نفس الأصل. يبقى الرابط حيًا حتى انتهاء مدة التشغيل (حد GitHub ست ساعات)، وأي تشغيل جديد
+يوقف السابق (`concurrency`). كل شيء يُحذف مع انتهاء الـjob.
+
+`DemoSeeder` (`backend/database/seeders/DemoSeeder.php`) يبني مبنىين و6 وحدات و4 عملاء وثلاثة عقود وحجزًا
+وبعض الإيصالات (منها ملغى) عبر خدمات الـAPI نفسها، ولا يعمل على قاعدة فيها مبانٍ أصلًا.
+
 ## ملاحظات
 
 - كل المبالغ `DECIMAL(14,2)` وتُحسب عبر `MoneyCalculator`؛ البيانات المالية لا تُحذف، بل تُلغى بسبب.

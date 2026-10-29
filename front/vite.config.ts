@@ -10,6 +10,13 @@ import siteConfiguration from './.figma/make/site.json'
 export default defineConfig(({ mode }) => {
   // .figma/make/deploy-preview passes `--mode development` for cached-preview builds.
   const emitSourcemaps = mode === 'development'
+  // Vite rejects requests whose Host it doesn't know (DNS-rebinding guard). The temporary GitHub
+  // Actions demo is reached through a Cloudflare quick tunnel, so allow that domain (comma-separate
+  // more in VITE_ALLOWED_HOSTS when using another tunnel). localhost/IPs stay allowed by default.
+  const tunnelHosts = (process.env.VITE_ALLOWED_HOSTS ?? '.trycloudflare.com')
+    .split(',')
+    .map((host) => host.trim())
+    .filter(Boolean)
 
   return {
     base: process.env.FIGMA_PUBLIC_URL ? `${process.env.FIGMA_PUBLIC_URL}/` : '/',
@@ -34,6 +41,7 @@ react(),
       host: process.env.FIGMA_DEV_SERVER_HOST || '0.0.0.0',
       port: parseInt(process.env.PORT || '8443'),
       strictPort: true,
+      allowedHosts: tunnelHosts,
       // Serve the Laravel API under the same origin. Same-origin requests skip the CORS
       // preflight, so each API call costs one request instead of two.
       proxy: {
@@ -51,6 +59,7 @@ react(),
     preview: {
       host: process.env.FIGMA_DEV_SERVER_HOST || '0.0.0.0',
       port: parseInt(process.env.PORT || '8443'),
+      allowedHosts: tunnelHosts,
       proxy: {
         '/api': {
           target: process.env.VITE_API_PROXY || 'http://127.0.0.1:8000',
