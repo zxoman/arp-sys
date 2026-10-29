@@ -50,7 +50,11 @@ npm run build
 `.github/workflows/demo.yml` يشغّل المشروع كاملًا داخل الـjob ويفتح رابطًا عامًا مؤقتًا:
 
 1. Actions → **Demo preview (temporary public URL)** → **Run workflow** (يمكن تحديد المدة بالدقائق، والحد الأقصى 350).
-2. يقرأ الرابط من ملخّص التشغيل (Summary) أو من سجل خطوة «Open the public tunnel».
+2. يظهر الرابط في صفحة التشغيل (**Environments → demo-preview** وفي **Summary**)، ويُطبع أيضًا في سجل خطوة «Open the public tunnel». يمكن قراءته من الطرفية أثناء التشغيل:
+   ```bash
+   gh api "repos/zxoman/arp-sys/deployments?environment=demo-preview&per_page=1" --jq '.[0].id' \
+     | xargs -I{} gh api "repos/zxoman/arp-sys/deployments/{}/statuses?per_page=1" --jq '.[0].environment_url'
+   ```
 3. الدخول: `admin` / `password123` — بيانات تجريبية فقط.
 
 كيف يعمل: يثبّت PHP 8.2 وNode 22، ينشئ قاعدة **SQLite** مؤقتة (`migrate --seed` + `DemoSeeder`)، يشغّل
