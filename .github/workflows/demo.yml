@@ -17,6 +17,9 @@ on:
 
 permissions:
   contents: read
+  # Publishes the live URL as a deployment so it is readable while the job runs (the job log and
+  # the step summary only become available once the run finishes).
+  deployments: write
 
 concurrency:
   group: demo-preview
@@ -131,6 +134,17 @@ jobs:
             echo "ينتهي الرابط بانتهاء هذا التشغيل (${DEMO_MINUTES} دقيقة كحد أقصى 350)."
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Publish the preview URL as a deployment
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo '{"ref":"'"$GITHUB_REF_NAME"'","environment":"demo-preview","auto_merge":false,"required_contexts":[]}' \
+            | gh api -X POST "repos/$GITHUB_REPOSITORY/deployments" --input - --jq '.id' > "$RUNNER_TEMP/deployment.id"
+          DEPLOYMENT_ID=$(cat "$RUNNER_TEMP/deployment.id")
+          gh api -X POST "repos/$GITHUB_REPOSITORY/deployments/$DEPLOYMENT_ID/statuses" \
+            -f state=success -f environment_url="$URL" -f description="Temporary demo preview" > /dev/null
+          echo "published deployment $DEPLOYMENT_ID → $URL"
+
       - name: Keep the demo online
         run: |
           echo "Demo: $URL"
@@ -152,6 +166,16 @@ jobs:
             sleep 30
           done
           echo "Demo finished after $MINUTES minutes."
+
+      - name: Close the deployment
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -f "$RUNNER_TEMP/deployment.id" ]; then
+            gh api -X POST "repos/$GITHUB_REPOSITORY/deployments/$(cat "$RUNNER_TEMP/deployment.id")/statuses" \
+              -f state=inactive -f description="Demo finished" > /dev/null || true
+          fi
 
       - name: Upload logs
         if: always()
