@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { egp, fmtDate, paymentLabel, type ContractStatus, type ContractType, type ISODate, type Unit } from '@/lib'
 import { toISO } from '@/lib/domain'
-import { ApiLoginCard, CONTRACT_TYPE_TONE, contractTypeLabel } from '../movement/shared'
+import { CONTRACT_TYPE_TONE, contractTypeLabel } from '../movement/shared'
 import {
   Btn,
   Combobox,
@@ -30,7 +30,6 @@ import {
   fetchAllUnits,
   fetchBuildingStatement,
   fetchUnitStatement,
-  hasToken,
   type ApiBuildingStatement,
   type ApiBuildingStatementContract,
   type ApiStatementFloor,
@@ -361,9 +360,6 @@ function FloorDetails({ row, units, onClear }: { row: ApiStatementFloor | undefi
 }
 
 function BuildingStatement() {
-  // ── Session ──────────────────────────────────────────────────────────────
-  const [authed, setAuthed] = useState(() => hasToken())
-  const [loginNotice, setLoginNotice] = useState<string | null>(null)
 
   // ── Building picker (server) ─────────────────────────────────────────────
   const [buildingOptions, setBuildingOptions] = useState<{ value: string; label: string; description?: string }[]>([])
@@ -379,21 +375,10 @@ function BuildingStatement() {
 
   const lostSession = useCallback((notice: string) => {
     clearToken()
-    setAuthed(false)
     setData(null)
-    setLoginNotice(notice)
-  }, [])
-
-  const reloggedIn = useCallback(() => {
-    setAuthed(true)
-    setLoginNotice(null)
-    setLoadError(null)
-    setBuildingId(null)
-    setReloadKey((k) => k + 1)
   }, [])
 
   useEffect(() => {
-    if (!authed) return
     let alive = true
     fetchAllBuildings()
       .then((buildings) => {
@@ -418,10 +403,10 @@ function BuildingStatement() {
     return () => {
       alive = false
     }
-  }, [authed, reloadKey, lostSession])
+  }, [reloadKey, lostSession])
 
   useEffect(() => {
-    if (!authed || !buildingId) {
+    if (!buildingId) {
       setData(null)
       return
     }
@@ -446,7 +431,7 @@ function BuildingStatement() {
     return () => {
       alive = false
     }
-  }, [authed, buildingId, reloadKey, lostSession])
+  }, [buildingId, reloadKey, lostSession])
 
   // A new building starts a new figure, so a floor of the old one cannot stay selected.
   useEffect(() => setFloor(null), [buildingId])
@@ -494,10 +479,6 @@ function BuildingStatement() {
     ],
     [],
   )
-
-  if (!authed) {
-    return <ApiLoginCard entity="كشف عقار" icon={<IconBuilding size={20} />} notice={loginNotice} onLoggedIn={reloggedIn} />
-  }
 
   const building = data?.building
   const totals = data?.totals
@@ -700,9 +681,6 @@ function UnitFigures({ contract, totals }: { contract: ApiUnitStatementContract 
 }
 
 function UnitStatement() {
-  // ── Session ──────────────────────────────────────────────────────────────
-  const [authed, setAuthed] = useState(() => hasToken())
-  const [loginNotice, setLoginNotice] = useState<string | null>(null)
 
   // ── Building + unit pickers (server) ─────────────────────────────────────
   const [buildingOptions, setBuildingOptions] = useState<{ value: string; label: string; description?: string }[]>([])
@@ -718,22 +696,10 @@ function UnitStatement() {
 
   const lostSession = useCallback((notice: string) => {
     clearToken()
-    setAuthed(false)
     setData(null)
-    setLoginNotice(notice)
-  }, [])
-
-  const reloggedIn = useCallback(() => {
-    setAuthed(true)
-    setLoginNotice(null)
-    setLoadError(null)
-    setBuildingId(null)
-    setUnitId(null)
-    setReloadKey((k) => k + 1)
   }, [])
 
   useEffect(() => {
-    if (!authed) return
     let alive = true
     fetchAllBuildings()
       .then((buildings) => {
@@ -756,10 +722,10 @@ function UnitStatement() {
     return () => {
       alive = false
     }
-  }, [authed, reloadKey, lostSession])
+  }, [reloadKey, lostSession])
 
   useEffect(() => {
-    if (!authed || !buildingId) {
+    if (!buildingId) {
       setUnits([])
       return
     }
@@ -778,7 +744,7 @@ function UnitStatement() {
     return () => {
       alive = false
     }
-  }, [authed, buildingId, reloadKey])
+  }, [buildingId, reloadKey])
 
   useEffect(() => {
     setUnitId(null)
@@ -786,7 +752,7 @@ function UnitStatement() {
   }, [buildingId])
 
   useEffect(() => {
-    if (!authed || !unitId) {
+    if (!unitId) {
       setData(null)
       return
     }
@@ -811,7 +777,7 @@ function UnitStatement() {
     return () => {
       alive = false
     }
-  }, [authed, unitId, reloadKey, lostSession])
+  }, [unitId, reloadKey, lostSession])
 
   const figureUnits = useMemo<FigureUnit[]>(
     () =>
@@ -885,10 +851,6 @@ function UnitStatement() {
     ],
     [],
   )
-
-  if (!authed) {
-    return <ApiLoginCard entity="كشف وحدة" icon={<IconLayers size={20} />} notice={loginNotice} onLoggedIn={reloggedIn} />
-  }
 
   const showSchedule = !!contract && contract.installments.length > 0
 

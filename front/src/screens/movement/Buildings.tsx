@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useAuth } from '@/lib/auth'
 import {
   BUILDING_ACTIVITIES,
   BUILDING_KINDS,
@@ -14,7 +15,6 @@ import {
   createBuilding,
   deleteBuilding,
   fetchBuildings,
-  hasToken,
   updateBuilding,
   type PageMeta,
 } from '@/lib/api'
@@ -38,7 +38,7 @@ import {
   type Column,
   type SortState,
 } from '@/kit'
-import { ApiLoginCard, codeOf, fmtNum, FormGrid, REQUIRED, SectionTitle, Segmented, ToggleChips, useNewShortcut, useShake, type Errors } from './shared'
+import { codeOf, fmtNum, FormGrid, REQUIRED, SectionTitle, Segmented, ToggleChips, useNewShortcut, useShake, type Errors } from './shared'
 
 const ACTIVITY_ITEMS = BUILDING_ACTIVITIES.map((a) => ({ value: a, label: a }))
 const BASEMENT_ITEMS = ['لا', 'نعم'] as const
@@ -95,6 +95,7 @@ function validate(d: Draft): Errors<Key> {
 const isAuthError = (err: unknown) => err instanceof ApiError && (err.status === 401 || err.status === 419)
 
 export default function Buildings() {
+  const { logout } = useAuth()
   const toast = useToast()
   const [mode, setMode] = useState<'new' | 'edit' | 'view' | null>(null)
   const [current, setCurrent] = useState<Building | null>(null)
@@ -106,8 +107,6 @@ export default function Buildings() {
   const [formRef, shake] = useShake<HTMLFormElement>()
 
   // Server-side table state: search (debounced), sort and 0-based page.
-  const [authed, setAuthed] = useState(() => hasToken())
-  const [loginNotice, setLoginNotice] = useState<string | null>(null)
   const [rows, setRows] = useState<Building[]>([])
   const [meta, setMeta] = useState<PageMeta>({ current_page: 1, last_page: 1, per_page: 15, total: 0, from: null, to: null })
   const [loading, setLoading] = useState(false)
@@ -128,10 +127,6 @@ export default function Buildings() {
   }, [searchInput])
 
   useEffect(() => {
-    if (!authed) {
-      setRows([])
-      return
-    }
     let alive = true
     setLoading(true)
     setLoadError(null)
@@ -151,8 +146,6 @@ export default function Buildings() {
         setRows([])
         if (isAuthError(err)) {
           clearToken()
-          setAuthed(false)
-          setLoginNotice('انتهت الجلسة أو التوكن غير صالح. سجّل الدخول من جديد.')
           return
         }
         setLoadError(err instanceof Error ? err.message : 'تعذّر تحميل المباني من الخادم')
@@ -163,17 +156,15 @@ export default function Buildings() {
     return () => {
       alive = false
     }
-  }, [authed, search, page, sort, reloadKey])
+  }, [search, page, sort, reloadKey])
 
   const reload = () => setReloadKey((k) => k + 1)
 
-  /** Called when a request comes back 401/419: drops the token and shows the login card again. */
+  /** Called when a request comes back 401/419: drops the token, which signs the app out. */
   const lostSession = () => {
     clearToken()
-    setAuthed(false)
     setMode(null)
     setToDelete(null)
-    setLoginNotice('انتهت الجلسة أو التوكن غير صالح. سجّل الدخول من جديد.')
   }
 
   const openNew = () => {
@@ -325,26 +316,6 @@ export default function Buildings() {
   const ro = { readOnly: view, disabled: view }
   const notLoaded = loadError !== null && rows.length === 0
 
-  // Not signed in: show only the login card, so no request is sent without a token.
-  if (!authed) {
-    return (
-      <ApiLoginCard
-        entity="العقارات"
-        icon={<IconBuilding size={20} />}
-        notice={loginNotice}
-        onLoggedIn={() => {
-          setAuthed(true)
-          setLoginNotice(null)
-          setLoadError(null)
-          setSearchInput('')
-          setSearch('')
-          setSort(null)
-          setPage(0)
-        }}
-      />
-    )
-  }
-
   return (
     <div className="grid gap-4">
       {loadError && (
@@ -370,12 +341,7 @@ export default function Buildings() {
             <Btn
               variant="ghost"
               size="sm"
-              onClick={() => {
-                clearToken()
-                setAuthed(false)
-                setRows([])
-                setLoginNotice(null)
-              }}
+              onClick={() => void logout()}
             >
               خروج
             </Btn>

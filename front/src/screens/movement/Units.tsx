@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { useAuth } from '@/lib/auth'
 import { offersRent, offersSale, type UnitPurpose } from '@/lib'
 import {
   API_UNIT_FIELD_TO_FORM,
@@ -11,7 +12,6 @@ import {
   fetchAllBuildings,
   fetchBuildingFloors,
   fetchUnits,
-  hasToken,
   purposeLabel,
   updateUnit,
   type ApiBuilding,
@@ -39,7 +39,7 @@ import {
   type Column,
   type SortState,
 } from '@/kit'
-import { ApiLoginCard, codeOf, fmtMoney, fmtNum, FormGrid, REQUIRED, SectionTitle, useNewShortcut, useShake, type Errors } from './shared'
+import { codeOf, fmtMoney, fmtNum, FormGrid, REQUIRED, SectionTitle, useNewShortcut, useShake, type Errors } from './shared'
 
 const SEARCH_DELAY_MS = 350
 
@@ -116,6 +116,7 @@ const isAuthError = (err: unknown) => err instanceof ApiError && (err.status ===
 const statusLabelOf = (u: ApiUnit) => (!u.is_sellable ? 'غير قابلة للبيع' : (u.status_label ?? 'متاحة'))
 
 export default function Units() {
+  const { logout } = useAuth()
   const toast = useToast()
   const [mode, setMode] = useState<'new' | 'edit' | 'view' | null>(null)
   const [current, setCurrent] = useState<ApiUnit | null>(null)
@@ -125,8 +126,6 @@ export default function Units() {
   const [formRef, shake] = useShake<HTMLFormElement>()
 
   // Auth + server-side table state (search is debounced; the page is 0-based).
-  const [authed, setAuthed] = useState(() => hasToken())
-  const [loginNotice, setLoginNotice] = useState<string | null>(null)
   const [rows, setRows] = useState<ApiUnit[]>([])
   const [meta, setMeta] = useState<PageMeta>({ current_page: 1, last_page: 1, per_page: 15, total: 0, from: null, to: null })
   const [loading, setLoading] = useState(false)
@@ -165,10 +164,6 @@ export default function Units() {
   }, [])
 
   useEffect(() => {
-    if (!authed) {
-      setBuildings([])
-      return
-    }
     let alive = true
     fetchAllBuildings()
       .then((list) => {
@@ -178,22 +173,20 @@ export default function Units() {
         if (!alive) return
         if (isAuthError(err)) {
           clearToken()
-          setAuthed(false)
-          setLoginNotice('انتهت الجلسة أو التوكن غير صالح. سجّل الدخول من جديد.')
         }
       })
     return () => {
       alive = false
     }
-  }, [authed])
+  }, [])
 
   useEffect(() => {
-    if (authed && fBuilding) void loadFloors(Number(fBuilding))
-  }, [authed, fBuilding, loadFloors])
+    if (fBuilding) void loadFloors(Number(fBuilding))
+  }, [fBuilding, loadFloors])
 
   useEffect(() => {
-    if (authed && draft.buildingId) void loadFloors(Number(draft.buildingId))
-  }, [authed, draft.buildingId, loadFloors])
+    if (draft.buildingId) void loadFloors(Number(draft.buildingId))
+  }, [draft.buildingId, loadFloors])
 
   // Debounce the search box so the API isn't hit on every keystroke.
   useEffect(() => {
@@ -205,10 +198,6 @@ export default function Units() {
   }, [searchInput])
 
   useEffect(() => {
-    if (!authed) {
-      setRows([])
-      return
-    }
     let alive = true
     setLoading(true)
     setLoadError(null)
@@ -234,8 +223,6 @@ export default function Units() {
         setRows([])
         if (isAuthError(err)) {
           clearToken()
-          setAuthed(false)
-          setLoginNotice('انتهت الجلسة أو التوكن غير صالح. سجّل الدخول من جديد.')
           return
         }
         setLoadError(err instanceof Error ? err.message : 'تعذّر تحميل الوحدات من الخادم')
@@ -246,16 +233,14 @@ export default function Units() {
     return () => {
       alive = false
     }
-  }, [authed, search, page, sort, fBuilding, fFloor, fType, fPurpose, fState, reloadKey])
+  }, [search, page, sort, fBuilding, fFloor, fType, fPurpose, fState, reloadKey])
 
   const reload = () => setReloadKey((k) => k + 1)
 
-  /** Called when a request comes back 401/419: drops the token and shows the login card again. */
+  /** Called when a request comes back 401/419: drops the token, which signs the app out. */
   const lostSession = () => {
     clearToken()
-    setAuthed(false)
     setMode(null)
-    setLoginNotice('انتهت الجلسة أو التوكن غير صالح. سجّل الدخول من جديد.')
   }
 
   const buildingOf = (id: string) => buildings.find((b) => String(b.id) === id) ?? null
@@ -437,26 +422,6 @@ export default function Units() {
   const filtering = Boolean(fBuilding || fFloor || fType || fPurpose || fState)
   const notLoaded = loadError !== null && rows.length === 0
 
-  // Not signed in: show only the login card, so no request is sent without a token.
-  if (!authed) {
-    return (
-      <ApiLoginCard
-        entity="الوحدات"
-        icon={<IconLayers size={20} />}
-        notice={loginNotice}
-        onLoggedIn={() => {
-          setAuthed(true)
-          setLoginNotice(null)
-          setLoadError(null)
-          setSearchInput('')
-          setSearch('')
-          setSort(null)
-          setPage(0)
-        }}
-      />
-    )
-  }
-
   return (
     <div className="grid gap-4">
       {loadError && (
@@ -558,12 +523,7 @@ export default function Units() {
             <Btn
               variant="ghost"
               size="sm"
-              onClick={() => {
-                clearToken()
-                setAuthed(false)
-                setRows([])
-                setLoginNotice(null)
-              }}
+              onClick={() => void logout()}
             >
               خروج
             </Btn>

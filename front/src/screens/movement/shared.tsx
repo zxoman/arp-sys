@@ -1,8 +1,7 @@
 import { useCallback, useMemo, useRef, useState, type ReactNode } from 'react'
 import { CLIENT_TYPES, newId, storageKey, useData, type Client, type ClientType, type ContractType, type Unit } from '@/lib'
-import { API_BASE_URL, ApiError, clearToken, login } from '@/lib/api'
-import { Btn, Combobox, IconBuilding, IconPlus, IconUsers, Modal, SectionCard, Select, TextInput, useField, useToast } from '@/kit'
-import { Text, type BadgeTone } from '@/components/ui'
+import { Btn, Combobox, IconBuilding, IconPlus, IconUsers, Modal, Select, TextInput, useField, useToast } from '@/kit'
+import { type BadgeTone } from '@/components/ui'
 import { cn } from '@/lib/cn'
 import { useShortcutAction } from '@/kit/shortcuts'
 
@@ -76,113 +75,6 @@ export function useShake<T extends HTMLElement>() {
 
 export function FormGrid({ children }: { children: ReactNode }) {
   return <div className="grid gap-4 sm:grid-cols-2">{children}</div>
-}
-
-/**
- * Token login card used by the pages that read/write the Laravel API (buildings, units, clients,
- * reservations). Those pages are server-driven, so their auth is the API's Sanctum token — not the
- * local account in `lib/auth` that gates the demo screens.
- *
- *   if (!authed) return <ApiLoginCard entity="العملاء" icon={<IconUsers />} notice={loginNotice} onLoggedIn={…} />
- */
-export function ApiLoginCard({
-  entity,
-  icon,
-  notice,
-  onLoggedIn,
-}: {
-  /** Plural page subject, e.g. «العملاء» → «العملاء تُقرأ وتُحفظ على الخادم: …». */
-  entity: string
-  icon?: ReactNode
-  /** Shown until the next attempt; carries «انتهت الجلسة» after a 401/419. */
-  notice?: string | null
-  onLoggedIn: () => void
-}) {
-  const [loginName, setLoginName] = useState('')
-  const [password, setPassword] = useState('')
-  const [error, setError] = useState<string | null>(null)
-  const [loggingIn, setLoggingIn] = useState(false)
-
-  const submit = async () => {
-    const loginValue = loginName.trim()
-    if (!loginValue || !password) {
-      setError('أدخل اسم المستخدم وكلمة المرور.')
-      return
-    }
-    setLoggingIn(true)
-    setError(null)
-    try {
-      await login(loginValue, password)
-      setPassword('')
-      onLoggedIn()
-    } catch (err) {
-      if (err instanceof ApiError) setError(err.errors.login?.[0] ?? err.message)
-      else setError(err instanceof Error ? err.message : 'تعذّر تسجيل الدخول')
-      clearToken()
-    } finally {
-      setLoggingIn(false)
-    }
-  }
-
-  const message = error ?? notice ?? null
-
-  return (
-    <div className="mx-auto grid w-full max-w-md gap-3 py-6">
-      <SectionCard
-        title="الدخول إلى النظام"
-        description={`${entity} تُقرأ وتُحفظ على الخادم: ${API_BASE_URL.startsWith('http') ? API_BASE_URL : `${location.origin}${API_BASE_URL}`}`}
-        icon={icon}
-      >
-        <form
-          className="grid gap-3"
-          noValidate
-          onSubmit={(e) => {
-            e.preventDefault()
-            void submit()
-          }}
-        >
-          <TextInput
-            label="اسم المستخدم أو البريد"
-            required
-            autoFocus
-            autoComplete="username"
-            dir="ltr"
-            value={loginName}
-            onChange={(e) => {
-              setLoginName(e.target.value)
-              if (error) setError(null)
-            }}
-          />
-          <TextInput
-            label="كلمة المرور"
-            type="password"
-            required
-            autoComplete="current-password"
-            dir="ltr"
-            value={password}
-            onChange={(e) => {
-              setPassword(e.target.value)
-              if (error) setError(null)
-            }}
-          />
-          {message && (
-            <Text variant="caption" className="text-danger" role="alert">
-              {message}
-            </Text>
-          )}
-          <Btn type="submit" loading={loggingIn} disabled={!loginName.trim() || !password}>
-            دخول
-          </Btn>
-        </form>
-      </SectionCard>
-      {import.meta.env.DEV && (
-        <Text variant="caption" className="text-center">
-          للتطوير: الحساب الافتراضي <bdi className="font-semibold">admin</bdi> وكلمة المرور{' '}
-          <bdi className="font-semibold">password123</bdi>
-        </Text>
-      )}
-    </div>
-  )
 }
 
 export function SectionTitle({ children }: { children: ReactNode }) {

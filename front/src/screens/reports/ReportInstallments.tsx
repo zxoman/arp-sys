@@ -7,7 +7,7 @@ import { AreaChart, BarChart, DonutChart, type DonutTone } from '@/kit/charts'
 import type { BadgeTone } from '@/components/ui'
 import { compose } from '../records'
 import type { RecordView } from '@/kit'
-import { ApiLoginCard, FilterChips, goToReceipt } from '../movement/shared'
+import { FilterChips, goToReceipt } from '../movement/shared'
 import {
   ApiError,
   clearToken,
@@ -17,7 +17,6 @@ import {
   fetchDueOverdueReport,
   fetchInstallmentsSummary,
   fetchMonthlyRevenue,
-  hasToken,
   PAYMENT_METHOD_FROM_API,
   type ApiCancelledCollectionPayment,
   type ApiCollectionPayment,
@@ -222,9 +221,6 @@ const STATUS_TO_API: Record<string, 'active' | 'cancelled'> = { 'نشط': 'activ
 const EMPTY_COUNTS: InstallmentsSummaryCounts = { all: 0, sale: 0, rent: 0 }
 
 function SummaryView() {
-  // ── Session ──────────────────────────────────────────────────────────────
-  const [authed, setAuthed] = useState(() => hasToken())
-  const [loginNotice, setLoginNotice] = useState<string | null>(null)
 
   // ── Report rows (server) ─────────────────────────────────────────────────
   const [rows, setRows] = useState<SummaryRow[]>([])
@@ -245,23 +241,10 @@ function SummaryView() {
 
   const lostSession = useCallback((notice: string) => {
     clearToken()
-    setAuthed(false)
     setRows([])
-    setLoginNotice(notice)
-  }, [])
-
-  const reloggedIn = useCallback(() => {
-    setAuthed(true)
-    setLoginNotice(null)
-    setLoadError(null)
-    setBuildingId('')
-    setClientId(null)
-    setStatus('')
-    reload()
   }, [])
 
   useEffect(() => {
-    if (!authed) return
     let alive = true
     Promise.all([fetchAllBuildings(), fetchAllClients()])
       .then(([buildings, clients]) => {
@@ -275,10 +258,9 @@ function SummaryView() {
     return () => {
       alive = false
     }
-  }, [authed, reloadKey])
+  }, [reloadKey])
 
   useEffect(() => {
-    if (!authed) return
     let alive = true
     setLoading(true)
     setLoadError(null)
@@ -309,7 +291,7 @@ function SummaryView() {
       alive = false
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authed, kind, buildingId, clientId, status, reloadKey])
+  }, [kind, buildingId, clientId, status, reloadKey])
 
   const k = useMemo(() => {
     const sum = (f: (r: SummaryRow) => number) => rows.reduce((s, r) => s + f(r), 0)
@@ -388,17 +370,6 @@ function SummaryView() {
 
   const active = !!(buildingId || clientId || status)
   const label = kind === 'بيع' ? 'عقود البيع' : 'عقود الإيجار'
-
-  if (!authed) {
-    return (
-      <ApiLoginCard
-        entity="ملخص الأقساط والعقود"
-        icon={<IconFile size={20} />}
-        notice={loginNotice}
-        onLoggedIn={reloggedIn}
-      />
-    )
-  }
 
   return (
     <>
@@ -604,10 +575,6 @@ function DelayChip({ days }: { days: number }) {
 function AgingView() {
   const { settings } = useData()
 
-  // ── Session ──────────────────────────────────────────────────────────────
-  const [authed, setAuthed] = useState(() => hasToken())
-  const [loginNotice, setLoginNotice] = useState<string | null>(null)
-
   // ── Report rows (server) ─────────────────────────────────────────────────
   const [rows, setRows] = useState<AgingRow[]>([])
   const [meta, setMeta] = useState<DueOverdueMeta>(EMPTY_DUE_OVERDUE_META)
@@ -626,24 +593,11 @@ function AgingView() {
 
   const lostSession = useCallback((notice: string) => {
     clearToken()
-    setAuthed(false)
     setRows([])
     setMeta(EMPTY_DUE_OVERDUE_META)
-    setLoginNotice(notice)
-  }, [])
-
-  const reloggedIn = useCallback(() => {
-    setAuthed(true)
-    setLoginNotice(null)
-    setLoadError(null)
-    setBuildingId('')
-    setClientId(null)
-    setBucket('all')
-    reload()
   }, [])
 
   useEffect(() => {
-    if (!authed) return
     let alive = true
     Promise.all([fetchAllBuildings(), fetchAllClients()])
       .then(([buildings, clients]) => {
@@ -657,10 +611,9 @@ function AgingView() {
     return () => {
       alive = false
     }
-  }, [authed, reloadKey])
+  }, [reloadKey])
 
   useEffect(() => {
-    if (!authed) return
     let alive = true
     setLoading(true)
     setLoadError(null)
@@ -690,7 +643,7 @@ function AgingView() {
       alive = false
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authed, buildingId, clientId, bucket, reloadKey])
+  }, [buildingId, clientId, bucket, reloadKey])
 
   const totals = meta.buckets
   const clientsLate = useMemo(() => new Set(rows.filter((r) => r.days > 0).map((r) => r.clientId)).size, [rows])
@@ -750,17 +703,6 @@ function AgingView() {
   )
 
   const active = !!(buildingId || clientId || bucket !== 'all')
-
-  if (!authed) {
-    return (
-      <ApiLoginCard
-        entity="الأقساط المستحقة والمتأخرة"
-        icon={<IconAlert size={20} />}
-        notice={loginNotice}
-        onLoggedIn={reloggedIn}
-      />
-    )
-  }
 
   return (
     <>
@@ -874,10 +816,6 @@ function MonthlyView() {
     return { from: `${months[0]}-01`, to: addDays(addMonths(`${months[months.length - 1]}-01`, 1), -1) }
   }, [today])
 
-  // ── Session ──────────────────────────────────────────────────────────────
-  const [authed, setAuthed] = useState(() => hasToken())
-  const [loginNotice, setLoginNotice] = useState<string | null>(null)
-
   // ── Report (server) ──────────────────────────────────────────────────────
   const [data, setData] = useState<ApiMonthlyRevenue | null>(null)
   const [loading, setLoading] = useState(false)
@@ -890,21 +828,10 @@ function MonthlyView() {
 
   const lostSession = useCallback((notice: string) => {
     clearToken()
-    setAuthed(false)
     setData(null)
-    setLoginNotice(notice)
-  }, [])
-
-  const reloggedIn = useCallback(() => {
-    setAuthed(true)
-    setLoginNotice(null)
-    setLoadError(null)
-    setBuildingId('')
-    reload()
   }, [])
 
   useEffect(() => {
-    if (!authed) return
     let alive = true
     fetchAllBuildings()
       .then((buildings) => {
@@ -916,10 +843,9 @@ function MonthlyView() {
     return () => {
       alive = false
     }
-  }, [authed, reloadKey])
+  }, [reloadKey])
 
   useEffect(() => {
-    if (!authed) return
     let alive = true
     setLoading(true)
     setLoadError(null)
@@ -942,7 +868,7 @@ function MonthlyView() {
       alive = false
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authed, buildingId, period.from, period.to, reloadKey])
+  }, [buildingId, period.from, period.to, reloadKey])
 
   const rows = useMemo<MonthRow[]>(() => (data?.months ?? []).map(monthRowFromApi), [data])
   const totals = data?.totals ?? null
@@ -977,17 +903,6 @@ function MonthlyView() {
     }
     return cols
   }, [totals])
-
-  if (!authed) {
-    return (
-      <ApiLoginCard
-        entity="الإيرادات الشهرية"
-        icon={<IconWallet size={20} />}
-        notice={loginNotice}
-        onLoggedIn={reloggedIn}
-      />
-    )
-  }
 
   return (
     <>
@@ -1127,10 +1042,6 @@ function DailyView() {
   const [today] = useState(() => toISO(new Date()))
   const defaultFrom = addDays(today, -29)
 
-  // ── Session ──────────────────────────────────────────────────────────────
-  const [authed, setAuthed] = useState(() => hasToken())
-  const [loginNotice, setLoginNotice] = useState<string | null>(null)
-
   // ── Report (server) ──────────────────────────────────────────────────────
   const [data, setData] = useState<ApiDailyCollection | null>(null)
   const [loading, setLoading] = useState(false)
@@ -1145,24 +1056,10 @@ function DailyView() {
 
   const lostSession = useCallback((notice: string) => {
     clearToken()
-    setAuthed(false)
     setData(null)
-    setLoginNotice(notice)
   }, [])
 
-  const reloggedIn = useCallback(() => {
-    setAuthed(true)
-    setLoginNotice(null)
-    setLoadError(null)
-    setBuildingId('')
-    setFrom(defaultFrom)
-    setTo(today)
-    reload()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [defaultFrom, today])
-
   useEffect(() => {
-    if (!authed) return
     let alive = true
     fetchAllBuildings()
       .then((buildings) => {
@@ -1174,10 +1071,9 @@ function DailyView() {
     return () => {
       alive = false
     }
-  }, [authed, reloadKey])
+  }, [reloadKey])
 
   useEffect(() => {
-    if (!authed) return
     if (!from || !to) {
       setData(null)
       return
@@ -1204,7 +1100,7 @@ function DailyView() {
       alive = false
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authed, buildingId, from, to, reloadKey])
+  }, [buildingId, from, to, reloadKey])
 
   const rows = useMemo<ReceiptRow[]>(() => (data?.payments ?? []).map(receiptRowFromApi), [data])
   const cancelled = useMemo<CancelledRow[]>(() => (data?.cancelled_payments ?? []).map(cancelledRowFromApi), [data])
@@ -1280,17 +1176,6 @@ function DailyView() {
   )
 
   const active = !!buildingId || from !== defaultFrom || to !== today
-
-  if (!authed) {
-    return (
-      <ApiLoginCard
-        entity="التحصيل اليومي"
-        icon={<IconWallet size={20} />}
-        notice={loginNotice}
-        onLoggedIn={reloggedIn}
-      />
-    )
-  }
 
   return (
     <>

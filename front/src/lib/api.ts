@@ -241,6 +241,21 @@ export async function login(login: string, password: string): Promise<ApiUser> {
   return res.data.user
 }
 
+/** `GET /auth/me` — re-reads the user behind the stored token (used to restore the session). */
+export async function fetchMe(): Promise<ApiUser> {
+  const res = await request<ApiUser>('/auth/me')
+  return res.data
+}
+
+/** `POST /auth/logout` — revokes the current token server-side, then drops it locally. */
+export async function logout(): Promise<void> {
+  try {
+    await request('/auth/logout', { method: 'POST' })
+  } finally {
+    clearToken()
+  }
+}
+
 const payload = (input: BuildingInput) => ({
   name: input.name.trim(),
   city: input.city.trim(),

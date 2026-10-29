@@ -4,7 +4,7 @@ import { addDays, diffDays, rentForYear, toISO } from '@/lib/domain'
 import { TODAY_ISO } from '@/data'
 import { Btn, GlassSurface, IconAlert, IconBuilding, IconCalendar, IconCheckCircle, IconLayers, IconUsers, IconWallet, IconXCircle, LiquidTabs, Select, StatusChip, SummaryCard, type Column } from '@/kit'
 import { DonutChart, type DonutTone } from '@/kit/charts'
-import { ApiLoginCard, CONTRACT_TYPE_TONE, RETURNS_KEY, floorLabel, usePersistentList } from '../movement/shared'
+import { CONTRACT_TYPE_TONE, RETURNS_KEY, floorLabel, usePersistentList } from '../movement/shared'
 import { ChartCard, KpiGrid, ReportActions, ReportFilterBar, ReportTable } from './shared'
 import { serialColumn } from '@/kit/codes'
 import { CODE_LABEL } from '@/lib/codes'
@@ -13,7 +13,6 @@ import {
   clearToken,
   fetchAllBuildings,
   fetchUnitStatus,
-  hasToken,
   PURPOSE_FROM_API,
   PURPOSE_TO_API,
   UNIT_TYPE_TO_API,
@@ -415,9 +414,6 @@ const buildingStatusRow = (b: ApiUnitStatus['by_building'][number]): BuildingSta
 })
 
 function UnitStatusView() {
-  // ── Session ──────────────────────────────────────────────────────────────
-  const [authed, setAuthed] = useState(() => hasToken())
-  const [loginNotice, setLoginNotice] = useState<string | null>(null)
 
   // ── Report (server) ──────────────────────────────────────────────────────
   const [data, setData] = useState<ApiUnitStatus | null>(null)
@@ -433,23 +429,10 @@ function UnitStatusView() {
 
   const lostSession = useCallback((notice: string) => {
     clearToken()
-    setAuthed(false)
     setData(null)
-    setLoginNotice(notice)
-  }, [])
-
-  const reloggedIn = useCallback(() => {
-    setAuthed(true)
-    setLoginNotice(null)
-    setLoadError(null)
-    setBuildingId('')
-    setType('')
-    setPurpose('')
-    reload()
   }, [])
 
   useEffect(() => {
-    if (!authed) return
     let alive = true
     fetchAllBuildings()
       .then((buildings) => {
@@ -461,10 +444,9 @@ function UnitStatusView() {
     return () => {
       alive = false
     }
-  }, [authed, reloadKey])
+  }, [reloadKey])
 
   useEffect(() => {
-    if (!authed) return
     let alive = true
     setLoading(true)
     setLoadError(null)
@@ -487,7 +469,7 @@ function UnitStatusView() {
       alive = false
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authed, buildingId, type, purpose, reloadKey])
+  }, [buildingId, type, purpose, reloadKey])
 
   const counts = data?.counts
   const totals = data?.totals
@@ -577,10 +559,6 @@ function UnitStatusView() {
   }, [])
 
   const active = !!(buildingId || type || purpose)
-
-  if (!authed) {
-    return <ApiLoginCard entity="حالة الوحدات" icon={<IconLayers size={20} />} notice={loginNotice} onLoggedIn={reloggedIn} />
-  }
 
   return (
     <>

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useAuth } from '@/lib/auth'
 import { egp, fmtDate, type ISODate } from '@/lib'
 import { addMonths } from '@/lib/domain'
 import { TODAY_ISO } from '@/data'
@@ -22,13 +23,12 @@ import {
   EMPTY_COLLECTION_META,
   fetchCollectionCalendar,
   fetchCollections,
-  hasToken,
   type ApiCalendarDay,
   type ApiCollectionRow,
   type CollectionMeta,
   type CollectionStatus,
 } from '@/lib/api'
-import { ApiLoginCard, CONTRACT_TYPE_TONE, goToReceipt, useNewShortcut } from './shared'
+import { CONTRACT_TYPE_TONE, goToReceipt, useNewShortcut } from './shared'
 import { serialColumn } from '@/kit/codes'
 import { CODE_LABEL } from '@/lib/codes'
 
@@ -80,9 +80,7 @@ const unitLabel = (row: ApiCollectionRow) => [row.building_name, row.unit_name].
    ================================================================== */
 
 export default function RentDue() {
-  // ── Session ──────────────────────────────────────────────────────────────
-  const [authed, setAuthed] = useState(() => hasToken())
-  const [loginNotice, setLoginNotice] = useState<string | null>(null)
+  const { logout } = useAuth()
 
   // ── Collection list (server) ─────────────────────────────────────────────
   const [rows, setRows] = useState<ApiCollectionRow[]>([])
@@ -110,20 +108,7 @@ export default function RentDue() {
 
   const lostSession = useCallback((notice: string) => {
     clearToken()
-    setAuthed(false)
     setRows([])
-    setLoginNotice(notice)
-  }, [])
-
-  const reloggedIn = useCallback(() => {
-    setAuthed(true)
-    setLoginNotice(null)
-    setLoadError(null)
-    setSearchInput('')
-    setSearch('')
-    setFilter('الكل')
-    setPage(0)
-    reload()
   }, [])
 
   useEffect(() => {
@@ -136,7 +121,6 @@ export default function RentDue() {
 
   // ── Data: one page of rows ───────────────────────────────────────────────
   useEffect(() => {
-    if (!authed) return
     let alive = true
     setLoading(true)
     setLoadError(null)
@@ -171,11 +155,10 @@ export default function RentDue() {
       alive = false
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authed, tab, search, typeFilter, filter, day, page, sort, reloadKey])
+  }, [tab, search, typeFilter, filter, day, page, sort, reloadKey])
 
   // ── Data: calendar of the visible month ──────────────────────────────────
   useEffect(() => {
-    if (!authed) return
     let alive = true
     fetchCollectionCalendar(TAB_TO_ENDPOINT[tab], {
       month,
@@ -195,7 +178,7 @@ export default function RentDue() {
       alive = false
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authed, tab, month, typeFilter, reloadKey])
+  }, [tab, month, typeFilter, reloadKey])
 
   const typeCounts = useMemo<Partial<Record<TypeFilter, number>>>(() => {
     const counts = meta.type_counts
@@ -275,17 +258,6 @@ export default function RentDue() {
     [],
   )
 
-  if (!authed) {
-    return (
-      <ApiLoginCard
-        entity="الأقساط والإيجارات المستحقة"
-        icon={<IconWallet size={20} />}
-        notice={loginNotice}
-        onLoggedIn={reloggedIn}
-      />
-    )
-  }
-
   return (
     <div className="grid gap-4">
       {/* Summary */}
@@ -319,12 +291,7 @@ export default function RentDue() {
           </div>
           <button
             type="button"
-            onClick={() => {
-              clearToken()
-              setAuthed(false)
-              setRows([])
-              setLoginNotice(null)
-            }}
+            onClick={() => void logout()}
             className="text-xs font-semibold text-fg-3 hover:text-danger"
           >
             خروج

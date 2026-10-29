@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { useAuth } from '@/lib/auth'
 import {
   useData,
   egp,
@@ -25,7 +26,6 @@ import {
   fetchReservation,
   fetchReservationPayments,
   fetchReservations,
-  hasToken,
   type ApiBuilding,
   type ApiClient,
   type ApiReservation,
@@ -58,7 +58,6 @@ import {
 } from '@/kit'
 import { Text } from '@/components/ui'
 import {
-  ApiLoginCard,
   ClientPicker,
   FilterChips,
   floorLabel,
@@ -308,11 +307,10 @@ const dateOf = (value: string | null | undefined) => {
 }
 
 export default function Reservations() {
+  const { logout } = useAuth()
   const toast = useToast()
 
   // ── Server state ─────────────────────────────────────────────────────────
-  const [authed, setAuthed] = useState(() => hasToken())
-  const [loginNotice, setLoginNotice] = useState<string | null>(null)
   const [rows, setRows] = useState<ApiReservation[]>([])
   const [meta, setMeta] = useState<PageMeta>({ current_page: 1, last_page: 1, per_page: 15, total: 0, from: null, to: null })
   const [loading, setLoading] = useState(false)
@@ -362,10 +360,6 @@ export default function Reservations() {
   }, [searchInput])
 
   useEffect(() => {
-    if (!authed) {
-      setRows([])
-      return
-    }
     let alive = true
     setLoading(true)
     setLoadError(null)
@@ -397,12 +391,12 @@ export default function Reservations() {
       alive = false
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authed, search, filter, page, sort, reloadKey])
+  }, [search, filter, page, sort, reloadKey])
 
   // Options for the new-reservation pickers. Loaded when the drawer opens, not on page load:
   // they cost three list requests and the table itself doesn't need them.
   useEffect(() => {
-    if (!authed || mode === null || optionsReadyKey === optionsKey) return
+    if (mode === null || optionsReadyKey === optionsKey) return
     let alive = true
     Promise.all([fetchAllClients(), fetchReservableUnits(), fetchAllBuildings()])
       .then(([c, u, b]) => {
@@ -418,30 +412,16 @@ export default function Reservations() {
     return () => {
       alive = false
     }
-  }, [authed, mode, optionsKey, optionsReadyKey])
+  }, [mode, optionsKey, optionsReadyKey])
 
   const reload = () => setReloadKey((k) => k + 1)
 
   function lostSession(notice: string) {
     clearToken()
-    setAuthed(false)
     setMode(null)
     setCurrent(null)
     setCancelOpen(false)
     setPaymentToCancel(null)
-    setLoginNotice(notice)
-  }
-
-  const reloggedIn = () => {
-    setAuthed(true)
-    setLoginNotice(null)
-    setLoadError(null)
-    setSearchInput('')
-    setSearch('')
-    setFilter('الكل')
-    setSort({ key: 'date', dir: 'desc' })
-    setPage(0)
-    setOptionsKey((k) => k + 1)
   }
 
   const openNew = () => {
@@ -685,10 +665,6 @@ export default function Reservations() {
   const view = mode === 'view'
   const notLoaded = loadError !== null && rows.length === 0
 
-  if (!authed) {
-    return <ApiLoginCard entity="الحجوزات" icon={<IconCalendar size={20} />} notice={loginNotice} onLoggedIn={reloggedIn} />
-  }
-
   return (
     <div className="grid gap-4">
       {loadError && (
@@ -724,12 +700,7 @@ export default function Reservations() {
             <Btn
               variant="ghost"
               size="sm"
-              onClick={() => {
-                clearToken()
-                setAuthed(false)
-                setRows([])
-                setLoginNotice(null)
-              }}
+              onClick={() => void logout()}
             >
               خروج
             </Btn>

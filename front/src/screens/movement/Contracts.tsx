@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useAuth } from '@/lib/auth'
 import {
   useData,
   egp,
@@ -25,7 +26,6 @@ import {
   fetchReservableUnits,
   fetchReservations,
   fetchUnit,
-  hasToken,
   postContract,
   type ApiClient,
   type ApiContract,
@@ -74,7 +74,6 @@ import { printDocument } from '@/kit/print'
 import { shortcutLabel, useShortcutAction } from '@/kit/shortcuts'
 import { ContractDoc } from './ContractDoc'
 import {
-  ApiLoginCard,
   CONTRACT_TYPE_TONE,
   contractTypeLabel,
   FilterChips,
@@ -301,12 +300,11 @@ function rentDistribution(
    ================================================================== */
 
 export default function Contracts() {
+  const { logout } = useAuth()
   const { settings } = useData()
   const toast = useToast()
 
   // ── Server state ─────────────────────────────────────────────────────────
-  const [authed, setAuthed] = useState(() => hasToken())
-  const [loginNotice, setLoginNotice] = useState<string | null>(null)
   const [rows, setRows] = useState<ApiContract[]>([])
   const [meta, setMeta] = useState<PageMeta>({ current_page: 1, last_page: 1, per_page: 15, total: 0, from: null, to: null })
   const [loading, setLoading] = useState(false)
@@ -334,10 +332,6 @@ export default function Contracts() {
   }, [searchInput])
 
   useEffect(() => {
-    if (!authed) {
-      setRows([])
-      return
-    }
     let alive = true
     setLoading(true)
     setLoadError(null)
@@ -369,35 +363,22 @@ export default function Contracts() {
       alive = false
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authed, search, filter, page, sort, reloadKey])
+  }, [search, filter, page, sort, reloadKey])
 
   const reload = () => setReloadKey((k) => k + 1)
 
   const lostSession = useCallback((notice: string) => {
     clearToken()
-    setAuthed(false)
     setView('list')
     setDetailsId(null)
     setRows([])
-    setLoginNotice(notice)
-  }, [])
-
-  const reloggedIn = useCallback(() => {
-    setAuthed(true)
-    setLoginNotice(null)
-    setLoadError(null)
-    setSearchInput('')
-    setSearch('')
-    setFilter('الكل')
-    setSort({ key: 'date', dir: 'desc' })
-    setPage(0)
   }, [])
 
   const openNew = () => {
     setFormKey((k) => k + 1)
     setView('form')
   }
-  useNewShortcut(() => authed && view === 'list' && openNew())
+  useNewShortcut(() => view === 'list' && openNew())
 
   const printContract = (c: ApiContract) => {
     void printDocument(
@@ -524,10 +505,6 @@ export default function Contracts() {
     }
   }
 
-  if (!authed) {
-    return <ApiLoginCard entity="العقود" icon={<IconFile size={20} />} notice={loginNotice} onLoggedIn={reloggedIn} />
-  }
-
   if (view === 'form') return <ContractForm key={formKey} onDone={onFormDone} onExpired={lostSession} />
 
   if (view === 'details' && detailsId != null)
@@ -576,12 +553,7 @@ export default function Contracts() {
             <Btn
               variant="ghost"
               size="sm"
-              onClick={() => {
-                clearToken()
-                setAuthed(false)
-                setRows([])
-                setLoginNotice(null)
-              }}
+              onClick={() => void logout()}
             >
               خروج
             </Btn>

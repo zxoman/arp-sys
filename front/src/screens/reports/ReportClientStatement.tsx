@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { egp, fmtDate, paymentLabel, upfrontLabel, type ContractStatus, type ContractType, type ISODate } from '@/lib'
 import { toISO } from '@/lib/domain'
-import { ApiLoginCard, CONTRACT_TYPE_TONE, contractTypeLabel } from '../movement/shared'
+import { CONTRACT_TYPE_TONE, contractTypeLabel } from '../movement/shared'
 import { Combobox, DatePicker, GlassSurface, IconAlert, IconCheckCircle, IconFile, IconPhone, IconUsers, IconWallet, Select, StatusChip, SummaryCard, type Column } from '@/kit'
 import { Text, type BadgeTone } from '@/components/ui'
 import { ChartCard, KpiGrid, ReportActions, ReportFilterBar, ReportTable, inRange } from './shared'
@@ -12,7 +12,6 @@ import {
   clearToken,
   fetchAllClients,
   fetchCustomerStatement,
-  hasToken,
   PAYMENT_METHOD_FROM_API,
   STATEMENT_ALL_TIME_FROM,
   STATEMENT_ALL_TIME_TO,
@@ -100,9 +99,6 @@ function contractRow(c: ApiCustomerStatementContract): ContractRow {
 }
 
 export default function ReportClientStatement() {
-  // ── Session ──────────────────────────────────────────────────────────────
-  const [authed, setAuthed] = useState(() => hasToken())
-  const [loginNotice, setLoginNotice] = useState<string | null>(null)
 
   // ── Client picker (server) ───────────────────────────────────────────────
   const [clientOptions, setClientOptions] = useState<{ value: string; label: string; description?: string; keywords?: string }[]>([])
@@ -122,24 +118,10 @@ export default function ReportClientStatement() {
 
   const lostSession = useCallback((notice: string) => {
     clearToken()
-    setAuthed(false)
     setData(null)
-    setLoginNotice(notice)
-  }, [])
-
-  const reloggedIn = useCallback(() => {
-    setAuthed(true)
-    setLoginNotice(null)
-    setLoadError(null)
-    setClientId(null)
-    setFrom(null)
-    setTo(null)
-    setContractNumber('')
-    setReloadKey((k) => k + 1)
   }, [])
 
   useEffect(() => {
-    if (!authed) return
     let alive = true
     fetchAllClients()
       .then((clients) => {
@@ -159,10 +141,10 @@ export default function ReportClientStatement() {
     return () => {
       alive = false
     }
-  }, [authed, reloadKey])
+  }, [reloadKey])
 
   useEffect(() => {
-    if (!authed || !clientId) {
+    if (!clientId) {
       setData(null)
       return
     }
@@ -187,7 +169,7 @@ export default function ReportClientStatement() {
     return () => {
       alive = false
     }
-  }, [authed, clientId, reloadKey, lostSession])
+  }, [clientId, reloadKey, lostSession])
 
   // A client change starts a new statement, so a contract of the old client cannot stay selected.
   useEffect(() => setContractNumber(''), [clientId])
@@ -345,17 +327,6 @@ export default function ReportClientStatement() {
 
   const active = !!(contractNumber || from || to)
   const units = useMemo(() => [...new Set(contracts.map((c) => c.unit).filter((u): u is string => !!u))], [contracts])
-
-  if (!authed) {
-    return (
-      <ApiLoginCard
-        entity="كشف حساب عميل"
-        icon={<IconFile size={20} />}
-        notice={loginNotice}
-        onLoggedIn={reloggedIn}
-      />
-    )
-  }
 
   return (
     <>

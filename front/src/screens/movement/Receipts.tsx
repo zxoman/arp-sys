@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useAuth } from '@/lib/auth'
 import { cn } from '@/lib/cn'
 import { useData, egp, fmtDate, type ISODate, type Settings } from '@/lib'
 import { TODAY_ISO } from '@/data'
@@ -10,7 +11,6 @@ import {
   fetchActiveContracts,
   fetchContract,
   fetchReceipts,
-  hasToken,
   PAYMENT_METHOD_TO_API,
   PAYMENT_METHODS,
   type ApiContract,
@@ -45,7 +45,7 @@ import { PrintAmount, PrintFields, PrintLayout, PrintSignatures, printDocument }
 import { shortcutLabel, useShortcutAction } from '@/kit/shortcuts'
 import { serialColumn } from '@/kit/codes'
 import { CODE_LABEL, codeLine } from '@/lib/codes'
-import { ApiLoginCard, FilterChips, InfoPair, RECEIPT_PREFILL_KEY, useNewShortcut, useShake, type Errors } from './shared'
+import { FilterChips, InfoPair, RECEIPT_PREFILL_KEY, useNewShortcut, useShake, type Errors } from './shared'
 
 const SEARCH_DELAY_MS = 300
 const req = 'هذا الحقل مطلوب'
@@ -126,13 +126,10 @@ const day = (value: string) => value.slice(0, 10)
    ================================================================== */
 
 export default function Receipts() {
+  const { logout } = useAuth()
   const { settings } = useData()
   const toast = useToast()
   const { confirm, dialog: confirmDialog } = useConfirm()
-
-  // ── Session ──────────────────────────────────────────────────────────────
-  const [authed, setAuthed] = useState(() => hasToken())
-  const [loginNotice, setLoginNotice] = useState<string | null>(null)
 
   // ── Receipts list (server) ───────────────────────────────────────────────
   const [rows, setRows] = useState<ApiReceipt[]>([])
@@ -173,22 +170,8 @@ export default function Receipts() {
 
   const lostSession = useCallback((notice: string) => {
     clearToken()
-    setAuthed(false)
     setRows([])
     setContract(null)
-    setLoginNotice(notice)
-  }, [])
-
-  const reloggedIn = useCallback(() => {
-    setAuthed(true)
-    setLoginNotice(null)
-    setLoadError(null)
-    setSearchInput('')
-    setSearch('')
-    setFilter('الكل')
-    setPage(0)
-    reload()
-    setContractEpoch((k) => k + 1)
   }, [])
 
   const update = (patch: Partial<Draft>) => {
@@ -211,7 +194,6 @@ export default function Receipts() {
   }, [searchInput])
 
   useEffect(() => {
-    if (!authed) return
     let alive = true
     setLoading(true)
     setLoadError(null)
@@ -240,11 +222,10 @@ export default function Receipts() {
       alive = false
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authed, search, filter, page, sort, reloadKey])
+  }, [search, filter, page, sort, reloadKey])
 
   // ── Data: active contracts (the picker) ─────────────────────────────────
   useEffect(() => {
-    if (!authed) return
     let alive = true
     fetchActiveContracts()
       .then((list) => {
@@ -265,11 +246,11 @@ export default function Receipts() {
       alive = false
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authed, contractEpoch])
+  }, [contractEpoch])
 
   // ── Data: the picked contract with its installments ─────────────────────
   useEffect(() => {
-    if (!authed || !draft.contractId) {
+    if (!draft.contractId) {
       setContract(null)
       return
     }
@@ -301,7 +282,7 @@ export default function Receipts() {
       alive = false
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authed, draft.contractId])
+  }, [draft.contractId])
 
   const pickContract = (id: string | null) => {
     setRowPay({})
@@ -648,10 +629,6 @@ export default function Receipts() {
       : {}),
   })
 
-  if (!authed) {
-    return <ApiLoginCard entity="الإيصالات" icon={<IconFile size={20} />} notice={loginNotice} onLoggedIn={reloggedIn} />
-  }
-
   const contractOptions = contracts.map((c) => ({
     value: String(c.id),
     label: `${c.number} — ${c.client_name ?? '—'}`,
@@ -874,13 +851,7 @@ export default function Receipts() {
             <Btn
               variant="ghost"
               size="sm"
-              onClick={() => {
-                clearToken()
-                setAuthed(false)
-                setRows([])
-                setContract(null)
-                setLoginNotice(null)
-              }}
+              onClick={() => void logout()}
             >
               خروج
             </Btn>

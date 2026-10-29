@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useAuth } from '@/lib/auth'
 import {
   API_CLIENT_FIELD_TO_FORM,
   ApiError,
@@ -6,7 +7,6 @@ import {
   createClient,
   deleteClient,
   fetchClients,
-  hasToken,
   updateClient,
   type ApiClient,
   type ClientInput,
@@ -30,7 +30,7 @@ import {
   type Column,
   type SortState,
 } from '@/kit'
-import { ApiLoginCard, codeOf, FormGrid, REQUIRED, SectionTitle, useNewShortcut, useShake, type Errors } from './shared'
+import { codeOf, FormGrid, REQUIRED, SectionTitle, useNewShortcut, useShake, type Errors } from './shared'
 
 const SEARCH_DELAY_MS = 350
 
@@ -81,6 +81,7 @@ const dateOf = (value: string | null | undefined) => {
 }
 
 export default function Clients() {
+  const { logout } = useAuth()
   const toast = useToast()
   const [mode, setMode] = useState<'new' | 'edit' | 'view' | null>(null)
   const [current, setCurrent] = useState<ApiClient | null>(null)
@@ -92,8 +93,6 @@ export default function Clients() {
   const [formRef, shake] = useShake<HTMLFormElement>()
 
   // Auth + server-side table state (search is debounced; the page is 0-based).
-  const [authed, setAuthed] = useState(() => hasToken())
-  const [loginNotice, setLoginNotice] = useState<string | null>(null)
   const [rows, setRows] = useState<ApiClient[]>([])
   const [meta, setMeta] = useState<PageMeta>({ current_page: 1, last_page: 1, per_page: 15, total: 0, from: null, to: null })
   const [loading, setLoading] = useState(false)
@@ -114,10 +113,6 @@ export default function Clients() {
   }, [searchInput])
 
   useEffect(() => {
-    if (!authed) {
-      setRows([])
-      return
-    }
     let alive = true
     setLoading(true)
     setLoadError(null)
@@ -137,8 +132,6 @@ export default function Clients() {
         setRows([])
         if (isAuthError(err)) {
           clearToken()
-          setAuthed(false)
-          setLoginNotice('انتهت الجلسة أو التوكن غير صالح. سجّل الدخول من جديد.')
           return
         }
         setLoadError(err instanceof Error ? err.message : 'تعذّر تحميل العملاء من الخادم')
@@ -149,17 +142,15 @@ export default function Clients() {
     return () => {
       alive = false
     }
-  }, [authed, search, page, sort, reloadKey])
+  }, [search, page, sort, reloadKey])
 
   const reload = () => setReloadKey((k) => k + 1)
 
-  /** Called when a request comes back 401/419: drops the token and shows the login card again. */
+  /** Called when a request comes back 401/419: drops the token, which signs the app out. */
   const lostSession = () => {
     clearToken()
-    setAuthed(false)
     setMode(null)
     setToDelete(null)
-    setLoginNotice('انتهت الجلسة أو التوكن غير صالح. سجّل الدخول من جديد.')
   }
 
   const openNew = () => {
@@ -315,26 +306,6 @@ export default function Clients() {
   const ro = { readOnly: view, disabled: view }
   const notLoaded = loadError !== null && rows.length === 0
 
-  // Not signed in: show only the login card, so no request is sent without a token.
-  if (!authed) {
-    return (
-      <ApiLoginCard
-        entity="العملاء"
-        icon={<IconUsers size={20} />}
-        notice={loginNotice}
-        onLoggedIn={() => {
-          setAuthed(true)
-          setLoginNotice(null)
-          setLoadError(null)
-          setSearchInput('')
-          setSearch('')
-          setSort(null)
-          setPage(0)
-        }}
-      />
-    )
-  }
-
   return (
     <div className="grid gap-4">
       {loadError && (
@@ -360,12 +331,7 @@ export default function Clients() {
             <Btn
               variant="ghost"
               size="sm"
-              onClick={() => {
-                clearToken()
-                setAuthed(false)
-                setRows([])
-                setLoginNotice(null)
-              }}
+              onClick={() => void logout()}
             >
               خروج
             </Btn>
