@@ -2,13 +2,17 @@
 
 namespace App\Services\Buildings;
 
-use App\Models\Building;
-use App\Models\BuildingActivity;
-use App\Models\Floor;
 use App\Enums\AuditAction;
 use App\Enums\BuildingActivity as BuildingActivityEnum;
-use App\Enums\BuildingType;
+use App\Models\Building;
+use App\Models\BuildingActivity;
+use App\Models\Contract;
+use App\Models\Floor;
+use App\Models\Reservation;
+use App\Models\Unit;
 use App\Services\Audit\AuditLogger;
+use App\Services\Units\UnitTreeDeleter;
+use App\Support\Text\ArabicNormalizer;
 use App\Support\Transactions\Operation;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
@@ -31,9 +35,9 @@ class BuildingService
 
     public function __construct(
         private Operation $operation,
-        private AuditLogger $audit
-    ) {
-    }
+        private AuditLogger $audit,
+        private UnitTreeDeleter $deleter
+    ) {}
 
     public function create(array $data, $actor): Building
     {
@@ -63,7 +67,7 @@ class BuildingService
                 entityType: 'buildings',
                 entityId: $building->id,
                 newValues: $this->safeBuildingArray($building),
-                reason: 'Building created by ' . $actor->name,
+                reason: 'Building created by '.$actor->name,
             );
 
             return $building->load('activities', 'floors');
@@ -117,38 +121,58 @@ class BuildingService
                     'city' => $data['city'] ?? null,
                     'district' => $data['district'] ?? null,
                 ])),
-                reason: 'Building updated by ' . $actor->name,
+                reason: 'Building updated by '.$actor->name,
             );
 
             return $building->fresh()->load('activities', 'floors');
         });
     }
 
-    public function delete(Building $building, $actor): void
+    /**
+     * Delete a building for good, together with everything that hangs on it: its floors and units,
+     * every reservation made on them (or on the building directly) with its deposits, and every
+     * contract with its schedule, receipts and payments (BRIEF 2.1 as changed by the owner on
+     * 2026-10-30). Returns the removed counts for the API response.
+     *
+     * @return array<string, int>
+     */
+    public function delete(Building $building, $actor): array
     {
-        if ($building->hasUnits()) {
-            $this->audit->logRejected(
-action: AuditAction::DELETE->value,
-                reason: 'Cannot delete building with units',
+        return DB::transaction(function () use ($building, $actor) {
+            $oldValues = $this->safeBuildingArray($building);
+
+            $unitIds = Unit::withTrashed()->where('building_id', $building->id)->pluck('id');
+
+            // Contracts hang on the unit; reservations on the unit or on the building itself.
+            $contractIds = Contract::withTrashed()->whereIn('unit_id', $unitIds)->pluck('id');
+            $reservationIds = Reservation::withTrashed()
+                ->where(fn ($q) => $q->where('building_id', $building->id)->orWhereIn('unit_id', $unitIds))
+                ->pluck('id');
+
+            // Money first (a receipt blocks its contract), then the units, then the building.
+            $deleted = $this->deleter->deleteContracts($contractIds)
+                + $this->deleter->deleteReservations($reservationIds);
+
+            $deleted['units'] = $unitIds->count();
+            $deleted['floors'] = Floor::withTrashed()->where('building_id', $building->id)->count();
+
+            Unit::withTrashed()->whereIn('id', $unitIds)->forceDelete();
+            Floor::withTrashed()->where('building_id', $building->id)->forceDelete();
+            BuildingActivity::where('building_id', $building->id)->delete();
+
+            $building->forceDelete();
+
+            $this->audit->log(
+                action: AuditAction::DELETE->value,
                 entityType: 'buildings',
                 entityId: $building->id,
+                oldValues: $oldValues,
+                reason: 'Building deleted with its units, reservations, contracts and payments by '.$actor->name,
+                meta: ['deleted' => $deleted],
             );
 
-            throw ValidationException::withMessages([
-                'buildings' => __('buildings.cannot_delete_with_units'),
-            ]);
-        }
-
-        $oldValues = $this->safeBuildingArray($building);
-        $building->delete();
-
-        $this->audit->log(
-            action: AuditAction::REJECTED_OPERATION->value,
-            entityType: 'buildings',
-            entityId: $building->id,
-            oldValues: $oldValues,
-            reason: 'Building deleted by ' . $actor->name,
-        );
+            return $deleted;
+        });
     }
 
     /**
@@ -166,11 +190,12 @@ action: AuditAction::DELETE->value,
         }
 
         if ($query) {
-            $normalizedQuery = \App\Support\Text\ArabicNormalizer::normalize($query);
+            $normalizedQuery = ArabicNormalizer::normalize($query);
             // MySQL/MariaDB: we'll fetch and normalize in PHP for simplicity
             $rows = $queryBuilder->get()->map(function ($row) use ($type, $normalizedQuery) {
                 $value = $row->$type;
-                $normalized = \App\Support\Text\ArabicNormalizer::normalize($value);
+                $normalized = ArabicNormalizer::normalize($value);
+
                 return [
                     'value' => $value,
                     'normalized' => $normalized,
@@ -194,7 +219,7 @@ action: AuditAction::DELETE->value,
 
         $validActivities = BuildingActivityEnum::allValues();
         $invalid = array_diff($activities, $validActivities);
-        if (!empty($invalid)) {
+        if (! empty($invalid)) {
             throw ValidationException::withMessages([
                 'activities' => __('buildings.invalid_activities', ['activities' => implode(', ', $invalid)]),
             ]);
@@ -235,7 +260,7 @@ action: AuditAction::DELETE->value,
 
         // Check: cannot remove last activity
         $remainingCount = count(array_diff($currentActivities, $activitiesToRemove));
-        if ($remainingCount === 0 && !empty($currentActivities)) {
+        if ($remainingCount === 0 && ! empty($currentActivities)) {
             throw ValidationException::withMessages([
                 'activities' => __('buildings.cannot_remove_last_activity'),
             ]);
@@ -260,7 +285,7 @@ action: AuditAction::DELETE->value,
             oldValues: ['activities' => $currentActivities],
             newValues: ['activities' => $newActivities],
             isAutomatic: true,
-            reason: 'Activities updated by ' . $actor->name,
+            reason: 'Activities updated by '.$actor->name,
         );
     }
 
@@ -306,7 +331,7 @@ action: AuditAction::DELETE->value,
         if ($actualNew > $actualCurrent) {
             // Adding floors
             $start = $actualCurrent + 1;
-            if (!$hasBasement && $start === 1) {
+            if (! $hasBasement && $start === 1) {
                 $start = 1; // First floor above ground
             }
             // If has basement, floor 0 exists, so start from 1
@@ -348,7 +373,7 @@ action: AuditAction::DELETE->value,
             oldValues: ['floors_count' => $currentCount],
             newValues: ['floors_count' => $newCount],
             isAutomatic: true,
-            reason: 'Floors count updated by ' . $actor->name,
+            reason: 'Floors count updated by '.$actor->name,
         );
     }
 
@@ -366,7 +391,7 @@ action: AuditAction::DELETE->value,
                 ->where('floor_number', 0)
                 ->first();
 
-            if (!$existingBasement) {
+            if (! $existingBasement) {
                 Floor::create([
                     'building_id' => $building->id,
                     'floor_number' => 0,
@@ -400,13 +425,13 @@ action: AuditAction::DELETE->value,
             oldValues: ['has_basement' => $currentHasBasement],
             newValues: ['has_basement' => $newHasBasement],
             isAutomatic: true,
-            reason: 'Basement updated by ' . $actor->name,
+            reason: 'Basement updated by '.$actor->name,
         );
     }
 
     private function getFloorDisplayName(int $floorNumber): string
     {
-        return self::FLOOR_DISPLAY_NAMES[$floorNumber] ?? 'طابق ' . $floorNumber;
+        return self::FLOOR_DISPLAY_NAMES[$floorNumber] ?? 'طابق '.$floorNumber;
     }
 
     private function safeBuildingArray(Building $building): array

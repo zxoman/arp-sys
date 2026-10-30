@@ -99,10 +99,13 @@ class UnitsController extends Controller
     {
         $this->authorize('delete', $unit);
 
-        $this->unitService->delete($unit, $request->user());
+        $deleted = $this->unitService->delete($unit, $request->user());
 
         return response()->json([
-            'data' => ['message' => __('units.deleted')],
+            'data' => [
+                'message' => __('units.deleted'),
+                'deleted' => $deleted,
+            ],
         ]);
     }
 }

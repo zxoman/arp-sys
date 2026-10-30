@@ -2,14 +2,12 @@
 
 namespace App\Services\Units;
 
+use App\Enums\AuditAction;
+use App\Enums\UnitPurpose;
+use App\Enums\UnitStatus;
 use App\Models\Building;
 use App\Models\Floor;
 use App\Models\Unit;
-use App\Enums\AuditAction;
-use App\Enums\ContractStatus;
-use App\Enums\ReservationStatus;
-use App\Enums\UnitPurpose;
-use App\Enums\UnitStatus;
 use App\Services\Audit\AuditLogger;
 use App\Support\Money\Money;
 use App\Support\Transactions\Operation;
@@ -20,9 +18,9 @@ class UnitService
 {
     public function __construct(
         private Operation $operation,
-        private AuditLogger $audit
-    ) {
-    }
+        private AuditLogger $audit,
+        private UnitTreeDeleter $deleter
+    ) {}
 
     public function create(array $data, $actor): Unit
     {
@@ -34,7 +32,7 @@ class UnitService
                 ->where('building_id', $building->id)
                 ->first();
 
-            if (!$floor) {
+            if (! $floor) {
                 throw ValidationException::withMessages([
                     'floor_id' => __('units.floor_not_in_building'),
                 ]);
@@ -42,7 +40,7 @@ class UnitService
 
             // Validate activity is one of building's activities
             $activity = $data['activity'] ?? null;
-            if (!$activity) {
+            if (! $activity) {
                 // Auto-set if building has only one activity
                 $activities = $building->activities()->pluck('activity')->all();
                 if (count($activities) === 1) {
@@ -54,14 +52,14 @@ class UnitService
                 }
             }
 
-            if (!$building->activityExists($activity)) {
+            if (! $building->activityExists($activity)) {
                 throw ValidationException::withMessages([
                     'activity' => __('units.activity_not_in_building'),
                 ]);
             }
 
             // Validate area > 0
-            if (!isset($data['area']) || (float) $data['area'] <= 0) {
+            if (! isset($data['area']) || (float) $data['area'] <= 0) {
                 throw ValidationException::withMessages([
                     'area' => __('units.area_must_be_positive'),
                 ]);
@@ -106,7 +104,7 @@ class UnitService
                 entityType: 'units',
                 entityId: $unit->id,
                 newValues: $this->safeUnitArray($unit),
-                reason: 'Unit created by ' . $actor->name,
+                reason: 'Unit created by '.$actor->name,
             );
 
             return $unit->load('building', 'floor');
@@ -131,7 +129,7 @@ class UnitService
                     ->where('building_id', $unit->building_id)
                     ->first();
 
-                if (!$floor) {
+                if (! $floor) {
                     throw ValidationException::withMessages([
                         'floor_id' => __('units.floor_not_in_building'),
                     ]);
@@ -144,7 +142,7 @@ class UnitService
 
             // Validate activity is one of building's activities
             $activity = $data['activity'] ?? $unit->activity;
-            if ($activity !== $unit->activity && !$unit->building->activityExists($activity)) {
+            if ($activity !== $unit->activity && ! $unit->building->activityExists($activity)) {
                 throw ValidationException::withMessages([
                     'activity' => __('units.activity_not_in_building'),
                 ]);
@@ -186,26 +184,26 @@ class UnitService
             }
 
             try {
-            $unit->update([
-                'name' => $data['name'] ?? $unit->name,
-                'floor_id' => $data['floor_id'] ?? $unit->floor_id,
-                'type' => $data['type'] ?? $unit->type,
-                'activity' => $activity,
-                'purpose' => $purpose,
-                'area' => $data['area'] ?? $unit->area,
-                'price_per_meter' => $data['price_per_meter'] ?? $unit->price_per_meter,
-                'sale_price' => $salePrice,
-                'is_sellable' => $isSellable,
-                'non_sellable_reason' => $reason,
-                'rooms' => $data['rooms'] ?? $unit->rooms,
-                'bathrooms' => $data['bathrooms'] ?? $unit->bathrooms,
-                // status is NOT editable via API - it's automatic
-            ]);
-        } catch (\RuntimeException $e) {
-            throw ValidationException::withMessages([
-                'building_id' => $e->getMessage(),
-            ]);
-        }
+                $unit->update([
+                    'name' => $data['name'] ?? $unit->name,
+                    'floor_id' => $data['floor_id'] ?? $unit->floor_id,
+                    'type' => $data['type'] ?? $unit->type,
+                    'activity' => $activity,
+                    'purpose' => $purpose,
+                    'area' => $data['area'] ?? $unit->area,
+                    'price_per_meter' => $data['price_per_meter'] ?? $unit->price_per_meter,
+                    'sale_price' => $salePrice,
+                    'is_sellable' => $isSellable,
+                    'non_sellable_reason' => $reason,
+                    'rooms' => $data['rooms'] ?? $unit->rooms,
+                    'bathrooms' => $data['bathrooms'] ?? $unit->bathrooms,
+                    // status is NOT editable via API - it's automatic
+                ]);
+            } catch (\RuntimeException $e) {
+                throw ValidationException::withMessages([
+                    'building_id' => $e->getMessage(),
+                ]);
+            }
 
             $this->audit->log(
                 action: AuditAction::REJECTED_OPERATION->value,
@@ -227,44 +225,40 @@ class UnitService
                     'rooms' => $data['rooms'] ?? null,
                     'bathrooms' => $data['bathrooms'] ?? null,
                 ])),
-                reason: 'Unit updated by ' . $actor->name,
+                reason: 'Unit updated by '.$actor->name,
             );
 
             return $unit->fresh()->load('building', 'floor');
         });
     }
 
-    public function delete(Unit $unit, $actor): void
+    /**
+     * Delete a unit for good, together with everything that hangs on it: its reservations with
+     * their deposits, its contracts with their schedule, receipts and payments (BRIEF 2.3 as
+     * changed by the owner on 2026-10-30). Returns the removed counts for the API response.
+     */
+    public function delete(Unit $unit, $actor): array
     {
-        // Soft delete is blocked while the unit has an active reservation or any contract that
-        // was not cancelled (BRIEF 2.3). Cancelled contracts and cancelled reservations don't count.
-        $hasActiveReservation = $unit->reservations()
-            ->where('status', ReservationStatus::ACTIVE->value)
-            ->exists();
+        return DB::transaction(function () use ($unit, $actor) {
+            $deleted = $this->deleter->deleteUnit($unit);
 
-        $hasLiveContract = $unit->contracts()
-            ->where('status', '!=', ContractStatus::CANCELLED->value)
-            ->exists();
+            // Decrement floor units count
+            $unit->floor->decrement('units_count');
 
-        if ($hasActiveReservation || $hasLiveContract) {
-            throw ValidationException::withMessages([
-                'unit' => __('units.cannot_delete_with_reservation_or_contract'),
-            ]);
-        }
+            $oldValues = $this->safeUnitArray($unit);
+            $unit->forceDelete();
 
-        // Decrement floor units count
-        $unit->floor->decrement('units_count');
+            $this->audit->log(
+                action: AuditAction::DELETE->value,
+                entityType: 'units',
+                entityId: $unit->id,
+                oldValues: $oldValues,
+                reason: 'Unit deleted with its reservations and contracts by '.$actor->name,
+                meta: ['deleted' => $deleted + ['units' => 1]],
+            );
 
-        $oldValues = $this->safeUnitArray($unit);
-        $unit->delete();
-
-        $this->audit->log(
-            action: AuditAction::DELETE->value,
-            entityType: 'units',
-            entityId: $unit->id,
-            oldValues: $oldValues,
-            reason: 'Unit deleted by ' . $actor->name,
-        );
+            return $deleted + ['units' => 1];
+        });
     }
 
     /**
@@ -347,7 +341,7 @@ class UnitService
      */
     private function assertPurposeAndSaleFieldsUnlocked(Unit $unit, array $data): void
     {
-        if (!in_array($unit->status, [UnitStatus::SOLD, UnitStatus::RENTED], true)) {
+        if (! in_array($unit->status, [UnitStatus::SOLD, UnitStatus::RENTED], true)) {
             return;
         }
 
@@ -357,15 +351,15 @@ class UnitService
             $changedField = 'purpose';
         }
 
-        if (!$changedField && array_key_exists('is_sellable', $data) && (bool) $data['is_sellable'] !== (bool) $unit->is_sellable) {
+        if (! $changedField && array_key_exists('is_sellable', $data) && (bool) $data['is_sellable'] !== (bool) $unit->is_sellable) {
             $changedField = 'is_sellable';
         }
 
-        if (!$changedField && array_key_exists('non_sellable_reason', $data) && trim((string) $data['non_sellable_reason']) !== (string) $unit->non_sellable_reason) {
+        if (! $changedField && array_key_exists('non_sellable_reason', $data) && trim((string) $data['non_sellable_reason']) !== (string) $unit->non_sellable_reason) {
             $changedField = 'non_sellable_reason';
         }
 
-        if (!$changedField && array_key_exists('sale_price', $data) && !$this->sameMoney($data['sale_price'], $unit->sale_price)) {
+        if (! $changedField && array_key_exists('sale_price', $data) && ! $this->sameMoney($data['sale_price'], $unit->sale_price)) {
             $changedField = 'sale_price';
         }
 

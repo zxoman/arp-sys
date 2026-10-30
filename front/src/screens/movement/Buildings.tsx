@@ -15,6 +15,7 @@ import {
   createBuilding,
   deleteBuilding,
   fetchBuildings,
+  type DeletionCounts,
   updateBuilding,
   type PageMeta,
 } from '@/lib/api'
@@ -44,6 +45,16 @@ const ACTIVITY_ITEMS = BUILDING_ACTIVITIES.map((a) => ({ value: a, label: a }))
 const BASEMENT_ITEMS = ['لا', 'نعم'] as const
 /** Debounce of the search box before it hits the API. */
 const SEARCH_DELAY_MS = 350
+
+/** « — معها 2 وحدة، 1 عقد، 1 إيصال» for the delete toast (empty when nothing was linked). */
+function cascadeSummary(deleted: DeletionCounts): string {
+  const parts: string[] = []
+  if (deleted.units) parts.push(`${fmtNum(deleted.units)} وحدة`)
+  if (deleted.reservations) parts.push(`${fmtNum(deleted.reservations)} حجز`)
+  if (deleted.contracts) parts.push(`${fmtNum(deleted.contracts)} عقد`)
+  if (deleted.receipts) parts.push(`${fmtNum(deleted.receipts)} إيصال`)
+  return parts.length ? ` — حُذف معها ${parts.join('، ')}` : ''
+}
 
 /** DataTable column key → API `sort` parameter (columns without a server field aren't sortable). */
 const SORT_FIELDS: Record<string, string> = {
@@ -265,8 +276,8 @@ export default function Buildings() {
     const target = toDelete
     setDeleting(true)
     try {
-      if (target.apiId) await deleteBuilding(target.apiId)
-      toast.success('تم حذف المبنى', `«${target.name}»`)
+      const deleted = target.apiId ? await deleteBuilding(target.apiId) : {}
+      toast.success('تم حذف المبنى نهائيًا', `«${target.name}»${cascadeSummary(deleted)}`)
       setToDelete(null)
       // Deleting the only row on a later page leaves an empty page; step back one.
       if (rows.length === 1 && page > 0) setPage((p) => p - 1)
@@ -450,10 +461,10 @@ export default function Buildings() {
         size="sm"
         tone="danger"
         icon={<IconTrash size={20} />}
-        title="حذف المبنى؟"
+        title="حذف المبنى نهائيًا؟"
         description={
           toDelete &&
-          `سيتم حذف «${toDelete.name}» من الخادم. لا يمكن الحذف إذا كانت هناك وحدات مسجّلة على المبنى، ولا يمكن التراجع عن هذا الإجراء.`
+          `سيُحذف «${toDelete.name}» وكل ما يرتبط به نهائيًا من الخادم: الوحدات (${fmtNum(toDelete.unitsCount ?? 0)}) والحجوزات والعقود والإيصالات والمدفوعات. لا يمكن التراجع.`
         }
         footer={
           <>

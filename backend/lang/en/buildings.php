@@ -3,8 +3,7 @@
 return [
     'created' => 'Building created successfully.',
     'updated' => 'Building updated successfully.',
-    'deleted' => 'Building deleted successfully.',
-    'cannot_delete_with_units' => 'Cannot delete building because it has units.',
+    'deleted' => 'Building and everything linked to it deleted successfully.',
     'at_least_one_activity' => 'At least one activity is required.',
     'invalid_activities' => 'Invalid activities: :activities.',
     'cannot_remove_activity_in_use' => 'Cannot remove activity ":activity" because units use it.',

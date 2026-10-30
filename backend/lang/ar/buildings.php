@@ -3,8 +3,7 @@
 return [
     'created' => 'تم إنشاء العقار بنجاح.',
     'updated' => 'تم تحديث العقار بنجاح.',
-    'deleted' => 'تم حذف العقار بنجاح.',
-    'cannot_delete_with_units' => 'لا يمكن حذف العقار لوجود وحدات مرتبطة به.',
+    'deleted' => 'تم حذف العقار وكل ما يرتبط به بنجاح.',
     'at_least_one_activity' => 'نشاط واحد على الأقل مطلوب.',
     'invalid_activities' => 'أنشطة غير صالحة: :activities.',
     'cannot_remove_activity_in_use' => 'لا يمكن إزالة النشاط ":activity" لأن وحدات تستخدمه.',

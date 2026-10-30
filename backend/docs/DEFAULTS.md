@@ -224,6 +224,23 @@ Rule: if a real business rule is missing from the BRIEF, ask — do not add it h
   - `by_building[]` repeats the five counts plus area / sale value / monthly rent per building, so the breakdown
     table never re-aggregates on the client.
 
+- **Cascade deletion of a building or a unit (2026-10-30, decided by the owner):** `DELETE /admin/buildings/{id}`
+  and `DELETE /admin/units/{id}` are **permanent** (hard delete) and take everything that hangs on the target with
+  them: the building's floors and units; every reservation on those units (or on the building itself, when it had no
+  unit) with its deposit payments; and every contract on those units with its installments, down payments, receipts
+  and payment lines. Clients are never deleted — they are master data and keep their other deals.
+  - This replaces the earlier guards (BRIEF 2.1 blocked a building that had units; 2.3 blocked a unit with an active
+    reservation or a live contract). Nothing blocks the delete any more; the confirmation in the UI is the only
+    warning.
+  - The response lists what was removed: `data.deleted = {units, floors, reservations, deposit_payments, contracts,
+    installments, receipts, payments}` (the unit response has no `floors`).
+  - One audit entry per call: action `delete`, entity `buildings`/`units`, the old building/unit values, and
+    `meta.deleted` with the same counts. The audit log of the deleted deals stays (append-only).
+  - Money disappears from every report/statement immediately because the payment rows no longer exist.
+  - Deletion order (`App\Services\Units\UnitTreeDeleter`): receipts first (the `receipts.contract_id` FK is
+    `restrictOnDelete`), then payment lines/down payments/installments, contracts, reservation payments,
+    reservations, units/floors, the building.
+
 ## Cross-cutting
 
 - Locale: `ar` by default, `en` secondary, from `Accept-Language`.

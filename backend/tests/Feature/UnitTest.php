@@ -3,7 +3,13 @@
 namespace Tests\Feature;
 
 use App\Models\Building;
+use App\Models\BuildingActivity;
+use App\Models\Client;
+use App\Models\Contract;
 use App\Models\Floor;
+use App\Models\Reservation;
+use App\Models\Role;
+use App\Models\Unit;
 use App\Models\User;
 use Tests\TestCase;
 
@@ -19,9 +25,9 @@ class UnitTest extends TestCase
             'lock_version' => 0,
         ]);
 
-        $role = \App\Models\Role::where('is_admin', true)->first();
-        if (!$role) {
-            $role = \App\Models\Role::create([
+        $role = Role::where('is_admin', true)->first();
+        if (! $role) {
+            $role = Role::create([
                 'name' => 'admin',
                 'is_admin' => true,
             ]);
@@ -45,12 +51,12 @@ class UnitTest extends TestCase
 
     protected function authHeaders(string $token): array
     {
-        return ['Authorization' => 'Bearer ' . $token];
+        return ['Authorization' => 'Bearer '.$token];
     }
 
-    protected function createBuildingWithActivities(array $overrides = []): \App\Models\Building
+    protected function createBuildingWithActivities(array $overrides = []): Building
     {
-        $building = \App\Models\Building::create(array_merge([
+        $building = Building::create(array_merge([
             'name' => 'Test Building',
             'number' => '1',
             'type' => 'building',
@@ -58,7 +64,7 @@ class UnitTest extends TestCase
             'floors_count' => 3,
         ], $overrides));
 
-        \App\Models\BuildingActivity::create([
+        BuildingActivity::create([
             'building_id' => $building->id,
             'activity' => $overrides['activity'] ?? 'residential',
         ]);
@@ -245,7 +251,7 @@ class UnitTest extends TestCase
             'display_name' => 'الأول',
             'units_count' => 0,
         ]);
-        $unit = \App\Models\Unit::create([
+        $unit = Unit::create([
             'building_id' => $building->id,
             'floor_id' => $floor->id,
             'name' => 'Sold Unit',
@@ -257,7 +263,7 @@ class UnitTest extends TestCase
         ]);
 
         $response = $this->withHeaders($this->authHeaders($admin['token']))
-            ->putJson('/api/v1/admin/units/' . $unit->id, [
+            ->putJson('/api/v1/admin/units/'.$unit->id, [
                 'area' => 200.00,
             ]);
 
@@ -282,7 +288,7 @@ class UnitTest extends TestCase
             'display_name' => 'الأول',
             'units_count' => 0,
         ]);
-        $unit = \App\Models\Unit::create([
+        $unit = Unit::create([
             'building_id' => $building1->id,
             'floor_id' => $floor1->id,
             'name' => 'Unit X',
@@ -293,18 +299,18 @@ class UnitTest extends TestCase
         ]);
 
         $response = $this->withHeaders($this->authHeaders($admin['token']))
-            ->putJson('/api/v1/admin/units/' . $unit->id, [
+            ->putJson('/api/v1/admin/units/'.$unit->id, [
                 'building_id' => $building2->id,
             ]);
 
         $response->assertStatus(422);
     }
 
-    public function test_cannot_delete_unit_with_active_reservation(): void
+    public function test_deleting_a_unit_removes_it_permanently(): void
     {
         $admin = $this->createAdmin();
 
-        $building = \App\Models\Building::create([
+        $building = Building::create([
             'name' => 'Building',
             'number' => '1',
             'type' => 'building',
@@ -318,7 +324,7 @@ class UnitTest extends TestCase
             'display_name' => 'الأول',
             'units_count' => 0,
         ]);
-        $unit = \App\Models\Unit::create([
+        $unit = Unit::create([
             'building_id' => $building->id,
             'floor_id' => $floor->id,
             'name' => 'Unit X',
@@ -328,22 +334,22 @@ class UnitTest extends TestCase
             'status' => 'available',
         ]);
 
-        // Reservation model is built in Phase 4; this test validates the delete guard logic
-        // which is implemented in UnitService::delete(). For now we verify the unit can be deleted
-        // when no reservation/contract exists.
+        // A unit with no reservation or contract still deletes; the cascade with linked deals is
+        // covered by DeletionCascadeTest.
         $response = $this->withHeaders($this->authHeaders($admin['token']))
-            ->deleteJson('/api/v1/admin/units/' . $unit->id);
+            ->deleteJson('/api/v1/admin/units/'.$unit->id);
 
         $response->assertStatus(200);
-        $this->assertSoftDeleted($unit);
+        $response->assertJsonPath('data.deleted.units', 1);
+        $this->assertDatabaseMissing('units', ['id' => $unit->id]);
     }
 
     /** A fresh building (single residential activity) + first floor, for the purpose/sale tests. */
     private function createContext(): array
     {
         $building = $this->createBuildingWithActivities([
-            'name' => 'Context ' . uniqid(),
-            'number' => 'C' . random_int(10000, 99999),
+            'name' => 'Context '.uniqid(),
+            'number' => 'C'.random_int(10000, 99999),
             'activity' => 'residential',
         ]);
 
@@ -454,7 +460,7 @@ class UnitTest extends TestCase
             ->assertStatus(201);
 
         $this->withHeaders($this->authHeaders($admin['token']))
-            ->putJson('/api/v1/admin/units/' . $created->json('data.id'), [
+            ->putJson('/api/v1/admin/units/'.$created->json('data.id'), [
                 'purpose' => 'rent',
             ])
             ->assertStatus(200)
@@ -514,7 +520,7 @@ class UnitTest extends TestCase
             ->assertStatus(201);
 
         $this->withHeaders($this->authHeaders($admin['token']))
-            ->putJson('/api/v1/admin/units/' . $created->json('data.id'), [
+            ->putJson('/api/v1/admin/units/'.$created->json('data.id'), [
                 'is_sellable' => true,
             ])
             ->assertStatus(200)
@@ -527,7 +533,7 @@ class UnitTest extends TestCase
         $admin = $this->createAdmin();
         [$building, $floor] = $this->createContext();
 
-        $unit = \App\Models\Unit::create([
+        $unit = Unit::create([
             'building_id' => $building->id,
             'floor_id' => $floor->id,
             'name' => 'Sold Unit',
@@ -540,18 +546,18 @@ class UnitTest extends TestCase
         ]);
 
         $this->withHeaders($this->authHeaders($admin['token']))
-            ->putJson('/api/v1/admin/units/' . $unit->id, ['purpose' => 'rent'])
+            ->putJson('/api/v1/admin/units/'.$unit->id, ['purpose' => 'rent'])
             ->assertStatus(422)
             ->assertJsonValidationErrors('purpose');
 
         $this->withHeaders($this->authHeaders($admin['token']))
-            ->putJson('/api/v1/admin/units/' . $unit->id, ['sale_price' => 700000.00])
+            ->putJson('/api/v1/admin/units/'.$unit->id, ['sale_price' => 700000.00])
             ->assertStatus(422)
             ->assertJsonValidationErrors('sale_price');
 
         // Sending the same values (or no changes) is still allowed.
         $this->withHeaders($this->authHeaders($admin['token']))
-            ->putJson('/api/v1/admin/units/' . $unit->id, ['purpose' => 'both', 'sale_price' => null])
+            ->putJson('/api/v1/admin/units/'.$unit->id, ['purpose' => 'both', 'sale_price' => null])
             ->assertStatus(200);
     }
 
@@ -611,7 +617,7 @@ class UnitTest extends TestCase
                 ->postJson('/api/v1/admin/units', [
                     'building_id' => $building->id,
                     'floor_id' => $floor->id,
-                    'name' => 'Meta Unit ' . $i,
+                    'name' => 'Meta Unit '.$i,
                     'type' => 'apartment',
                     'area' => 100.00,
                     'purpose' => 'both',
@@ -661,19 +667,19 @@ class UnitTest extends TestCase
             ->assertJsonPath('data.total_price', '500000.00');
 
         $this->withHeaders($this->authHeaders($admin['token']))
-            ->putJson('/api/v1/admin/units/' . $created->json('data.id'), ['sale_price' => null])
+            ->putJson('/api/v1/admin/units/'.$created->json('data.id'), ['sale_price' => null])
             ->assertStatus(200)
             ->assertJsonPath('data.sale_price', null)
             ->assertJsonPath('data.total_price', '400000.00');
     }
 
-    /** Soft delete is blocked while the unit has an active reservation or a non-cancelled contract (BRIEF 2.3). */
-    public function test_cannot_delete_unit_with_an_active_reservation_or_a_live_contract(): void
+    /** Deleting a unit is permanent and takes its reservation and contract with it (BRIEF 2.3, owner 2026-10-30). */
+    public function test_deleting_a_unit_removes_its_active_reservation_and_live_contract(): void
     {
         $admin = $this->createAdmin();
         [$building, $floor] = $this->createContext();
 
-        $unit = \App\Models\Unit::create([
+        $unit = Unit::create([
             'building_id' => $building->id,
             'floor_id' => $floor->id,
             'name' => 'Guarded Unit',
@@ -683,9 +689,9 @@ class UnitTest extends TestCase
             'status' => 'available',
         ]);
 
-        $client = \App\Models\Client::create(['name' => 'Client G', 'phone' => '+201000000099']);
+        $client = Client::create(['name' => 'Client G', 'phone' => '+201000000099']);
 
-        $reservation = \App\Models\Reservation::create([
+        $reservation = Reservation::create([
             'client_id' => $client->id,
             'building_id' => $building->id,
             'unit_id' => $unit->id,
@@ -695,17 +701,7 @@ class UnitTest extends TestCase
             'status' => 'active',
         ]);
 
-        $headers = $this->authHeaders($admin['token']);
-
-        $this->withHeaders($headers)
-            ->deleteJson('/api/v1/admin/units/' . $unit->id)
-            ->assertStatus(422)
-            ->assertJsonValidationErrors('unit');
-
-        // A cancelled reservation alone is history, not a block.
-        $reservation->update(['status' => 'cancelled', 'cancelled_at' => now(), 'cancellation_reason' => 'ملغي']);
-
-        \App\Models\Contract::create([
+        $contract = Contract::create([
             'number' => '2026-9998',
             'type' => 'sale',
             'client_id' => $client->id,
@@ -717,11 +713,17 @@ class UnitTest extends TestCase
             'status' => 'active',
         ]);
 
-        $this->withHeaders($headers)
-            ->deleteJson('/api/v1/admin/units/' . $unit->id)
-            ->assertStatus(422)
-            ->assertJsonValidationErrors('unit');
+        $this->withHeaders($this->authHeaders($admin['token']))
+            ->deleteJson('/api/v1/admin/units/'.$unit->id)
+            ->assertStatus(200)
+            ->assertJsonPath('data.deleted.units', 1)
+            ->assertJsonPath('data.deleted.reservations', 1)
+            ->assertJsonPath('data.deleted.contracts', 1);
 
-        $this->assertNotSoftDeleted($unit);
+        $this->assertDatabaseMissing('units', ['id' => $unit->id]);
+        $this->assertDatabaseMissing('reservations', ['id' => $reservation->id]);
+        $this->assertDatabaseMissing('contracts', ['id' => $contract->id]);
+        // The client is master data and is never touched by a deal deletion.
+        $this->assertDatabaseHas('clients', ['id' => $client->id]);
     }
 }

@@ -44,7 +44,7 @@ class BuildingsController extends Controller
             $activityMatch = $this->matchBuildingActivity($search);
 
             $query->where(function ($q) use ($search, $typeMatch, $activityMatch) {
-                $like = '%' . $search . '%';
+                $like = '%'.$search.'%';
                 $q->where('name', 'like', $like)
                     ->orWhere('number', 'like', $like)
                     ->orWhere('city', 'like', $like)
@@ -136,10 +136,13 @@ class BuildingsController extends Controller
     {
         $this->authorize('delete', $building);
 
-        $this->buildingService->delete($building, $request->user());
+        $deleted = $this->buildingService->delete($building, $request->user());
 
         return response()->json([
-            'data' => ['message' => __('buildings.deleted')],
+            'data' => [
+                'message' => __('buildings.deleted'),
+                'deleted' => $deleted,
+            ],
         ]);
     }
 

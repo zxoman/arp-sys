@@ -3,6 +3,9 @@
 namespace Tests\Feature;
 
 use App\Models\Building;
+use App\Models\Floor;
+use App\Models\Role;
+use App\Models\Unit;
 use App\Models\User;
 use Tests\TestCase;
 
@@ -18,9 +21,9 @@ class BuildingTest extends TestCase
             'lock_version' => 0,
         ]);
 
-        $role = \App\Models\Role::where('is_admin', true)->first();
-        if (!$role) {
-            $role = \App\Models\Role::create([
+        $role = Role::where('is_admin', true)->first();
+        if (! $role) {
+            $role = Role::create([
                 'name' => 'admin',
                 'is_admin' => true,
             ]);
@@ -44,13 +47,12 @@ class BuildingTest extends TestCase
 
     protected function authHeaders(string $token): array
     {
-        return ['Authorization' => 'Bearer ' . $token];
+        return ['Authorization' => 'Bearer '.$token];
     }
 
     public function test_admin_can_create_building_with_floors(): void
     {
         $admin = $this->createAdmin();
-
 
         $response = $this->withHeaders($this->authHeaders($admin['token']))
             ->postJson('/api/v1/admin/buildings', [
@@ -173,7 +175,6 @@ class BuildingTest extends TestCase
     {
         $admin = $this->createAdmin();
 
-
         $response = $this->withHeaders($this->authHeaders($admin['token']))
             ->postJson('/api/v1/admin/buildings', [
                 'name' => 'No Activities',
@@ -191,7 +192,6 @@ class BuildingTest extends TestCase
     public function test_building_number_unique(): void
     {
         $admin = $this->createAdmin();
-
 
         $this->withHeaders($this->authHeaders($admin['token']))
             ->postJson('/api/v1/admin/buildings', [
@@ -220,11 +220,11 @@ class BuildingTest extends TestCase
         $response->assertStatus(422);
     }
 
-    public function test_cannot_delete_building_with_units(): void
+    public function test_deleting_a_building_with_units_removes_them(): void
     {
         $admin = $this->createAdmin();
 
-        $building = \App\Models\Building::create([
+        $building = Building::create([
             'name' => 'Building With Units',
             'number' => '1',
             'type' => 'building',
@@ -232,16 +232,16 @@ class BuildingTest extends TestCase
             'floors_count' => 3,
         ]);
 
-        \App\Models\Floor::create([
+        Floor::create([
             'building_id' => $building->id,
             'floor_number' => 1,
             'display_name' => 'الأول',
             'units_count' => 1,
         ]);
 
-        \App\Models\Unit::create([
+        Unit::create([
             'building_id' => $building->id,
-            'floor_id' => \App\Models\Floor::where('building_id', $building->id)->first()->id,
+            'floor_id' => Floor::where('building_id', $building->id)->first()->id,
             'name' => 'Unit 1',
             'type' => 'apartment',
             'activity' => 'residential',
@@ -250,19 +250,24 @@ class BuildingTest extends TestCase
             'status' => 'available',
         ]);
 
-        $response = $this->withHeaders($this->authHeaders($admin['token']))
-            ->deleteJson('/api/v1/admin/buildings/' . $building->id);
+        $unitId = Unit::where('building_id', $building->id)->value('id');
 
-        $response->assertStatus(422);
-        $this->assertNotSoftDeleted($building);
+        $response = $this->withHeaders($this->authHeaders($admin['token']))
+            ->deleteJson('/api/v1/admin/buildings/'.$building->id);
+
+        // Deleting a building is a full, permanent cascade (see DeletionCascadeTest).
+        $response->assertStatus(200);
+        $response->assertJsonPath('data.deleted.units', 1);
+        $this->assertDatabaseMissing('buildings', ['id' => $building->id]);
+        $this->assertDatabaseMissing('units', ['id' => $unitId]);
+        $this->assertDatabaseMissing('floors', ['building_id' => $building->id]);
     }
 
     public function test_city_district_autocomplete(): void
     {
         $admin = $this->createAdmin();
 
-
-        \App\Models\Building::create([
+        Building::create([
             'name' => 'Building 1',
             'number' => '1',
             'type' => 'building',
@@ -273,7 +278,7 @@ class BuildingTest extends TestCase
             'district' => 'مصر الجديدة',
         ]);
 
-        \App\Models\Building::create([
+        Building::create([
             'name' => 'Building 2',
             'number' => '2',
             'type' => 'building',
@@ -295,7 +300,7 @@ class BuildingTest extends TestCase
     {
         $admin = $this->createAdmin();
 
-        \App\Models\Building::create([
+        Building::create([
             'name' => 'Building 1',
             'number' => '1',
             'type' => 'building',

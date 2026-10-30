@@ -178,7 +178,13 @@ must stay easy to change and be listed in `docs/DEFAULTS.md`.
   The money follows the state: a sold unit is worth its active contract's `total_price`, an available/reserved/sold
   unit its `sale_price` (`sale_price` column, null for rent-only), a rented one its active lease's `monthly_rent`.
   4 tests in `UnitStatusTest`. See DEFAULTS "Unit status report".
-- Test suite: 183 Pest tests, all green.
+- Deletion (2026-10-30, decided by the owner): `DELETE /admin/buildings/{id}` and `DELETE /admin/units/{id}` are a
+  **permanent cascade** — the building goes with its floors/units, the unit with its reservations/contracts, and each
+  contract with its installments, down payments, receipts and payment lines (`App\Services\Units\UnitTreeDeleter`).
+  The response returns `data.deleted` counts, one audit entry keeps the old values plus `meta.deleted`; the old
+  "blocked while it has units / a live deal" guards are gone (BRIEF 2.1/2.3). Clients are never touched.
+  2 tests in `DeletionCascadeTest`. See DEFAULTS "Cascade deletion".
+- Test suite: 185 Pest tests, all green.
 - Known gaps: `ReportsController::export` is still a stub (`export_url: null`); reports do not yet include the
   project name in their headers.
 
@@ -199,6 +205,7 @@ must stay easy to change and be listed in `docs/DEFAULTS.md`.
 ## Non-negotiable rules
 - Money: `DECIMAL(14,2)`; PHP uses string/BigDecimal, never float. All money math goes through `MoneyCalculator`.
 - Never hard-delete financial data. Financial items are cancelled with a reason; others are soft-deleted under the brief's guards.
+  The one exception is the owner-decided permanent building/unit cascade delete (BRIEF 2.1/2.3).
 - Unit status is automatic (reservation/contract operations only); there is no API to set it.
 - Contract financial fields and installment schedules are immutable; only notes are editable.
 - Installment `paid_amount`/`remaining`/`status` are updated ONLY by `InstallmentLedgerService`,

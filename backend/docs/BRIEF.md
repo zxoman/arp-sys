@@ -46,7 +46,7 @@ Standard add-building form (2026-10-27): name, city, district, type, activity, f
   - Display names (presentation only): 0 = "بدروم", 1 = "الأول", 2 = "الثاني", ...
   - Increasing floors_count adds floors. Decreasing is blocked if the removed top floors have units. Adding a basement creates floor 0; removing it is blocked if it has units.
   - Removing an activity from a building is blocked if units use it. The last remaining activity cannot be removed.
-  - Delete (soft) blocked if it has units.
+  - Delete: a PERMANENT cascade (owner, 2026-10-30) — the building goes with its floors, units, reservations (and their deposits), contracts (and their schedule, receipts and payments). No guard blocks it.
   - Floors have no standalone CRUD pages; they appear inside the building.
 
 ### 2.3 Unit (وحدة)
@@ -63,7 +63,7 @@ DECIDED:
 - No rent price field on the unit; rent value is entered at contract time. A rent-only unit has no sale price, so a reservation on it requires the reference price to be entered manually.
 - Editing area/price_per_meter blocked when the unit is sold. Past reservations/contracts keep their own frozen prices.
 - purpose, sale_price, is_sellable and non_sellable_reason are LOCKED once the unit is sold or rented (same guard as area/price_per_meter); they stay editable while available/reserved. Sending the same values is allowed.
-- Delete (soft) blocked if it has an active reservation or any non-cancelled contract.
+- Delete: a PERMANENT cascade (owner, 2026-10-30) — the unit goes with its reservations (and deposits) and contracts (and their schedule, receipts and payments).
 DEFAULT (unconfirmed):
 - Unit name unique within a building.
 - price_per_meter required.
@@ -108,7 +108,7 @@ DECIDED:
 - A schedule PREVIEW endpoint computes installments without saving.
 - Financial fields and the installment schedule are IMMUTABLE after creation. Corrections = cancel the contract and create a replacement. Notes are editable.
 - Cancelling a contract: requires a reason; unit returns to available. What happens to money already paid: see section 12 (unconfirmed).
-- Never hard-delete; soft delete blocked if any payment was made.
+- Never hard-delete; soft delete blocked if any payment was made. (The only exception is the owner-decided building/unit cascade — see 2.1/2.3.)
 DEFAULT (unconfirmed):
 - Contract number auto-generated, sequential per year (e.g. 2026-0001), unique, generated race-safely.
 - Start date may not be before contract date unless the user has a special permission (to allow back-dated old contracts later, make it a single rule).
@@ -157,8 +157,8 @@ DEFAULT (unconfirmed): login by username or email; one role per user; no per-use
 ## 5. Pages and Operations (API surface to implement)
 (No dashboard page. The dashboard was explicitly removed. Default landing page after login is permission/role based; unconfirmed.)
 1. Auth and profile: login, logout (revoke token), view/update own name and phone, change password (requires the old one; revokes other sessions).
-2. Buildings: list (filter by type, activity, city, district), create (activities, basement, autocomplete, auto floors), update (rules in 2.2), details (floors with units, planned vs registered), soft delete, suggestions endpoint, history.
-3. Units: list (filter by building, floor, type, activity, status, purpose, sellable), create, update, details (status, current reservation/contract, history), soft delete, no manual status change, history.
+2. Buildings: list (filter by type, activity, city, district), create (activities, basement, autocomplete, auto floors), update (rules in 2.2), details (floors with units, planned vs registered), permanent cascade delete (2.1), suggestions endpoint, history.
+3. Units: list (filter by building, floor, type, activity, status, purpose, sellable), create, update, details (status, current reservation/contract, history), permanent cascade delete (2.3), no manual status change, history.
 4. Clients: list/search, create (duplicate phone warning), update, profile (reservations, contracts, installments), soft delete, history.
 5. Reservations: list (filter by status, building, client), create (optionally with first payment), assign unit, add/cancel payment, cancel reservation (reason), "convert" action (returns pre-filled data for the contract screen; the contract is created via the contracts endpoint), details (payments, deposit paid), history. No price and no general edit endpoint.
 6. Contracts: list (filter by type, status, client), create (with optional reservation, schedule preview, atomic save), add/cancel down-payment payment, record installment payment, cancel installment payment, cancel contract (reason), details (data, down payment and payments, installments, statement), history. No edits to financial fields.

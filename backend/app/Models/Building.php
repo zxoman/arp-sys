@@ -2,7 +2,6 @@
 
 namespace App\Models;
 
-use App\Enums\BuildingActivity;
 use App\Enums\BuildingType;
 use App\Models\BuildingActivity as BuildingActivityModel;
 use App\Support\Text\ArabicNormalizer;
@@ -37,10 +36,11 @@ class Building extends Model
         'area' => 'decimal:2',
     ];
 
-    public function activities(): \Illuminate\Database\Eloquent\Relations\HasMany
+    public function activities(): HasMany
     {
         return $this->hasMany(BuildingActivityModel::class);
     }
+
     public function floors(): HasMany
     {
         return $this->hasMany(Floor::class)->orderBy('floor_number');
@@ -49,11 +49,6 @@ class Building extends Model
     public function units(): HasMany
     {
         return $this->hasMany(Unit::class);
-    }
-
-    public function hasUnits(): bool
-    {
-        return $this->units()->exists();
     }
 
     public function activityExists(string $activity): bool

@@ -326,9 +326,27 @@ export async function updateBuilding(apiId: number, input: BuildingInput): Promi
   return (await request<ApiBuilding>(`/admin/buildings/${apiId}`, { method: 'PUT', body: JSON.stringify(payload(input)) })).data
 }
 
-/** `DELETE /admin/buildings/{id}` — permission `buildings.delete`. */
-export async function deleteBuilding(apiId: number): Promise<void> {
-  await request<{ message: string }>(`/admin/buildings/${apiId}`, { method: 'DELETE' })
+/** What a full delete removed — the API returns the counts it deleted. */
+export interface DeletionCounts {
+  units?: number
+  floors?: number
+  reservations?: number
+  deposit_payments?: number
+  contracts?: number
+  installments?: number
+  receipts?: number
+  payments?: number
+}
+
+/**
+ * `DELETE /admin/buildings/{id}` — permission `buildings.delete`.
+ * Permanent cascade: the building goes with its floors, units, reservations, contracts, receipts and payments.
+ */
+export async function deleteBuilding(apiId: number): Promise<DeletionCounts> {
+  const data = (
+    await request<{ message: string; deleted?: DeletionCounts }>(`/admin/buildings/${apiId}`, { method: 'DELETE' })
+  ).data
+  return data.deleted ?? {}
 }
 
 /* ------------------------------------------------------------------ *

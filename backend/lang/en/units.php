@@ -16,5 +16,4 @@ return [
     'purpose_sale_only' => 'The unit is offered for sale only.',
     'purpose_rent_only' => 'The unit is offered for rent only.',
     'building_id_immutable' => 'Building ID is immutable after creation.',
-    'cannot_delete_with_reservation_or_contract' => 'Cannot delete unit with active reservation or non-cancelled contract.',
 ];

@@ -16,5 +16,4 @@ return [
     'purpose_sale_only' => 'الوحدة مخصصة للبيع فقط.',
     'purpose_rent_only' => 'الوحدة مخصصة للإيجار فقط.',
     'building_id_immutable' => 'معرف العقار لا يمكن تغييره بعد الإنشاء.',
-    'cannot_delete_with_reservation_or_contract' => 'لا يمكن حذف الوحدة التي تحتوي على حجز نشط أو عقد غير ملغي.',
 ];
