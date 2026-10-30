@@ -36,7 +36,7 @@ Rule: if a real business rule is missing from the BRIEF, ask — do not add it h
 - Two phone columns max: `phone` + `phone_2` (optional). A third number needs a schema change.
 - Phone normalization: strip spaces/dashes, Arabic-Indic digits -> ASCII, normalized before saving (both numbers).
 - `national_id`, `notes` exist but are optional and not part of the standard form. Clients have no email field.
-- A client with an ACTIVE reservation or ANY contract (even cancelled) cannot be soft-deleted (BRIEF 2.4, literal).
+- A client is deleted permanently with everything they own: reservations (with deposits) and contracts (with schedule, receipts and payments). Units whose only deal belonged to that client go back to `available` — a unit that still has another client's live contract or active reservation keeps its status. See «Cascade deletion» below (BRIEF 2.4 as changed by the owner on 2026-10-30).
 
 ## Reservations (BRIEF 2.5)
 
@@ -237,6 +237,9 @@ Rule: if a real business rule is missing from the BRIEF, ask — do not add it h
   - One audit entry per call: action `delete`, entity `buildings`/`units`, the old building/unit values, and
     `meta.deleted` with the same counts. The audit log of the deleted deals stays (append-only).
   - Money disappears from every report/statement immediately because the payment rows no longer exist.
+  - The same rule applies to `DELETE /admin/clients/{id}`: the client goes with their reservations and contracts
+    and all their money, and `data.deleted` adds `units_released` — the units that came back to `available`
+    because nothing live was left on them (`UnitService::releaseUnits`).
   - Deletion order (`App\Services\Units\UnitTreeDeleter`): receipts first (the `receipts.contract_id` FK is
     `restrictOnDelete`), then payment lines/down payments/installments, contracts, reservation payments,
     reservations, units/floors, the building.

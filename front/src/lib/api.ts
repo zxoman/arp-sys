@@ -336,6 +336,8 @@ export interface DeletionCounts {
   installments?: number
   receipts?: number
   payments?: number
+  /** Units sent back to `available` because their only deal was deleted. */
+  units_released?: number
 }
 
 /**
@@ -674,11 +676,15 @@ export async function updateClient(apiId: number, input: ClientInput): Promise<C
 }
 
 /**
- * `DELETE /admin/clients/{id}` — permission `clients.delete`. The API refuses (422) when the client
- * has an active reservation or any contract, even a cancelled one.
+ * `DELETE /admin/clients/{id}` — permission `clients.delete`.
+ * Permanent cascade: the client goes with every reservation and contract (receipts and payments
+ * included); the units left with nothing live return to `available`.
  */
-export async function deleteClient(apiId: number): Promise<void> {
-  await request<{ message: string }>(`/admin/clients/${apiId}`, { method: 'DELETE' })
+export async function deleteClient(apiId: number): Promise<DeletionCounts> {
+  const data = (
+    await request<{ message: string; deleted?: DeletionCounts }>(`/admin/clients/${apiId}`, { method: 'DELETE' })
+  ).data
+  return data.deleted ?? {}
 }
 
 /* ------------------------------------------------------------------ *

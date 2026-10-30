@@ -76,7 +76,7 @@ DEFAULT (unconfirmed):
 - Duplicate phone: WARN, do not block (DEFAULT, unconfirmed), checked across both numbers. Two phone columns max (DECIDED 2026-10-28); a third number needs a schema change.
 - There is NO email field on clients (removed 2026-10-28). Extra fields (national id, notes) can still be added later.
 - Search by name or phone, Arabic-normalized.
-- Soft delete blocked if the client has an active reservation or any contract.
+- Delete: a PERMANENT cascade (owner, 2026-10-30) — the client goes with every reservation (and deposit) and every contract (and schedule, receipts, payments). Units whose only deal belonged to them return to `available`; units that still carry another client's deal keep their status.
 
 ### 2.5 Reservation (حجز)
 DECIDED:
@@ -108,7 +108,7 @@ DECIDED:
 - A schedule PREVIEW endpoint computes installments without saving.
 - Financial fields and the installment schedule are IMMUTABLE after creation. Corrections = cancel the contract and create a replacement. Notes are editable.
 - Cancelling a contract: requires a reason; unit returns to available. What happens to money already paid: see section 12 (unconfirmed).
-- Never hard-delete; soft delete blocked if any payment was made. (The only exception is the owner-decided building/unit cascade — see 2.1/2.3.)
+- Never hard-delete; soft delete blocked if any payment was made. (The only exception is the owner-decided building/unit/client cascade — see 2.1/2.3/2.4.)
 DEFAULT (unconfirmed):
 - Contract number auto-generated, sequential per year (e.g. 2026-0001), unique, generated race-safely.
 - Start date may not be before contract date unless the user has a special permission (to allow back-dated old contracts later, make it a single rule).
@@ -159,7 +159,7 @@ DEFAULT (unconfirmed): login by username or email; one role per user; no per-use
 1. Auth and profile: login, logout (revoke token), view/update own name and phone, change password (requires the old one; revokes other sessions).
 2. Buildings: list (filter by type, activity, city, district), create (activities, basement, autocomplete, auto floors), update (rules in 2.2), details (floors with units, planned vs registered), permanent cascade delete (2.1), suggestions endpoint, history.
 3. Units: list (filter by building, floor, type, activity, status, purpose, sellable), create, update, details (status, current reservation/contract, history), permanent cascade delete (2.3), no manual status change, history.
-4. Clients: list/search, create (duplicate phone warning), update, profile (reservations, contracts, installments), soft delete, history.
+4. Clients: list/search, create (duplicate phone warning), update, profile (reservations, contracts, installments), permanent cascade delete (2.4), history.
 5. Reservations: list (filter by status, building, client), create (optionally with first payment), assign unit, add/cancel payment, cancel reservation (reason), "convert" action (returns pre-filled data for the contract screen; the contract is created via the contracts endpoint), details (payments, deposit paid), history. No price and no general edit endpoint.
 6. Contracts: list (filter by type, status, client), create (with optional reservation, schedule preview, atomic save), add/cancel down-payment payment, record installment payment, cancel installment payment, cancel contract (reason), details (data, down payment and payments, installments, statement), history. No edits to financial fields.
 7. Collection (التحصيل): all installments across contracts (filter by status incl. overdue, date range, client, building), record payment, open contract/client, export.

@@ -88,10 +88,13 @@ class ClientsController extends Controller
     {
         $this->authorize('delete', $client);
 
-        $this->clientService->delete($client, $request->user());
+        $deleted = $this->clientService->delete($client, $request->user());
 
         return response()->json([
-            'data' => ['message' => __('clients.deleted')],
+            'data' => [
+                'message' => __('clients.deleted'),
+                'deleted' => $deleted,
+            ],
         ]);
     }
 }

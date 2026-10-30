@@ -171,6 +171,61 @@ class DeletionCascadeTest extends TestCase
         $this->assertSame(1, $log->meta['deleted']['contracts']);
     }
 
+    public function test_deleting_a_client_removes_their_deals_and_money_but_leaves_other_clients(): void
+    {
+        $buildingId = $this->building('برج العملاء', 3);
+        $soldUnit = $this->unit($buildingId, '301');
+        $reservedUnit = $this->unit($buildingId, '302');
+        $otherUnit = $this->unit($buildingId, '303');
+
+        $gone = $this->client('عميل يُحذف');
+        $kept = $this->client('عميل يبقى');
+
+        // The client to delete: a sale contract with a receipt, plus an active reservation.
+        $this->contractWithReceipt($soldUnit, $gone);
+
+        $reservationId = $this->withHeaders($this->headers())->postJson('/api/v1/admin/reservations', [
+            'client_id' => $gone,
+            'unit_id' => $reservedUnit,
+            'reservation_date' => '2026-10-01',
+        ])->assertStatus(201)->json('data.id');
+
+        $this->withHeaders($this->headers())
+            ->postJson("/api/v1/admin/reservations/{$reservationId}/payments", [
+                'amount' => 5000,
+                'paid_at' => '2026-10-01',
+            ])->assertStatus(201);
+
+        // Another client's contract must survive untouched.
+        $this->contractWithReceipt($otherUnit, $kept);
+
+        $response = $this->withHeaders($this->headers())
+            ->deleteJson("/api/v1/admin/clients/{$gone}");
+
+        $response->assertStatus(200);
+        $response->assertJsonPath('data.deleted.contracts', 1);
+        $response->assertJsonPath('data.deleted.receipts', 1);
+        $response->assertJsonPath('data.deleted.payments', 2);
+        $response->assertJsonPath('data.deleted.reservations', 1);
+        $response->assertJsonPath('data.deleted.deposit_payments', 1);
+        $response->assertJsonPath('data.deleted.units_released', 2);
+
+        $this->assertDatabaseMissing('clients', ['id' => $gone]);
+        $this->assertDatabaseHas('clients', ['id' => $kept]);
+
+        // Their two units are free again; the other client's unit is still sold.
+        $this->assertDatabaseHas('units', ['id' => $soldUnit, 'status' => 'available']);
+        $this->assertDatabaseHas('units', ['id' => $reservedUnit, 'status' => 'available']);
+        $this->assertDatabaseHas('units', ['id' => $otherUnit, 'status' => 'sold']);
+
+        // Exactly the other client's deal is left (contract + receipt + payment lines).
+        $this->assertSame(1, DB::table('contracts')->count());
+        $this->assertSame(1, DB::table('receipts')->count());
+        $this->assertSame(2, DB::table('installment_payments')->count() + DB::table('contract_down_payments')->count());
+        $this->assertSame(0, DB::table('reservations')->count());
+        $this->assertSame(0, DB::table('reservation_payments')->count());
+    }
+
     public function test_deleting_one_unit_removes_its_contracts_reservations_and_money(): void
     {
         $buildingId = $this->building('برج الوحدة');

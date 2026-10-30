@@ -182,9 +182,11 @@ must stay easy to change and be listed in `docs/DEFAULTS.md`.
   **permanent cascade** — the building goes with its floors/units, the unit with its reservations/contracts, and each
   contract with its installments, down payments, receipts and payment lines (`App\Services\Units\UnitTreeDeleter`).
   The response returns `data.deleted` counts, one audit entry keeps the old values plus `meta.deleted`; the old
-  "blocked while it has units / a live deal" guards are gone (BRIEF 2.1/2.3). Clients are never touched.
-  2 tests in `DeletionCascadeTest`. See DEFAULTS "Cascade deletion".
-- Test suite: 185 Pest tests, all green.
+  "blocked while it has units / a live deal" guards are gone (BRIEF 2.1/2.3). Clients are never touched by a
+  building/unit delete, but `DELETE /admin/clients/{id}` cascades the same way (their reservations/contracts and
+  money) and sends the now-free units back to `available` (`UnitService::releaseUnits`, `units_released` in the
+  response) — BRIEF 2.4. 3 tests in `DeletionCascadeTest`. See DEFAULTS "Cascade deletion".
+- Test suite: 186 Pest tests, all green.
 - Known gaps: `ReportsController::export` is still a stub (`export_url: null`); reports do not yet include the
   project name in their headers.
 

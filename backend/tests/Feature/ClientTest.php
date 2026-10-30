@@ -2,7 +2,13 @@
 
 namespace Tests\Feature;
 
+use App\Models\Building;
 use App\Models\Client;
+use App\Models\Contract;
+use App\Models\Floor;
+use App\Models\Reservation;
+use App\Models\Role;
+use App\Models\Unit;
 use App\Models\User;
 use Tests\TestCase;
 
@@ -18,9 +24,9 @@ class ClientTest extends TestCase
             'lock_version' => 0,
         ]);
 
-        $role = \App\Models\Role::where('is_admin', true)->first();
-        if (!$role) {
-            $role = \App\Models\Role::create([
+        $role = Role::where('is_admin', true)->first();
+        if (! $role) {
+            $role = Role::create([
                 'name' => 'admin',
                 'is_admin' => true,
             ]);
@@ -45,7 +51,7 @@ class ClientTest extends TestCase
 
     protected function authHeaders(string $token): array
     {
-        return ['Authorization' => 'Bearer ' . $token];
+        return ['Authorization' => 'Bearer '.$token];
     }
 
     public function test_admin_can_create_client(): void
@@ -107,7 +113,7 @@ class ClientTest extends TestCase
         $client = Client::create(['name' => 'Old Name', 'phone' => '+201000000001']);
 
         $response = $this->withHeaders($this->authHeaders($admin['token']))
-            ->putJson('/api/v1/admin/clients/' . $client->id, [
+            ->putJson('/api/v1/admin/clients/'.$client->id, [
                 'name' => 'New Name',
             ]);
 
@@ -122,10 +128,11 @@ class ClientTest extends TestCase
         $client = Client::create(['name' => 'Deletable', 'phone' => '+201000000001']);
 
         $response = $this->withHeaders($this->authHeaders($admin['token']))
-            ->deleteJson('/api/v1/admin/clients/' . $client->id);
+            ->deleteJson('/api/v1/admin/clients/'.$client->id);
 
+        // Deleting a client is permanent (see DeletionCascadeTest for the cascade).
         $response->assertStatus(200);
-        $this->assertSoftDeleted($client);
+        $this->assertDatabaseMissing('clients', ['id' => $client->id]);
     }
 
     public function test_phone_normalization_on_create(): void
@@ -209,7 +216,7 @@ class ClientTest extends TestCase
         $admin = $this->createAdmin();
 
         foreach (range(1, 3) as $i) {
-            Client::create(['name' => 'Meta Client ' . $i, 'phone' => '+20100000000' . $i]);
+            Client::create(['name' => 'Meta Client '.$i, 'phone' => '+20100000000'.$i]);
         }
 
         $headers = $this->authHeaders($admin['token']);
@@ -287,45 +294,66 @@ class ClientTest extends TestCase
         $response->assertStatus(403);
     }
 
-    /**
-     * Soft delete is blocked while the client has an active reservation or any contract
-     * (BRIEF 2.4). A cancelled reservation alone doesn't block.
-     */
-    public function test_client_delete_is_blocked_by_an_active_reservation(): void
+    /** A client's active reservation goes with them; the unit comes back as available. */
+    public function test_deleting_a_client_removes_an_active_reservation(): void
     {
         $admin = $this->createAdmin();
 
+        $building = Building::create([
+            'name' => 'Building R',
+            'number' => 'R1',
+            'type' => 'building',
+            'activities' => ['residential'],
+            'area' => 1000.00,
+            'floors_count' => 1,
+        ]);
+
+        $floor = Floor::create([
+            'building_id' => $building->id,
+            'floor_number' => 1,
+            'display_name' => 'الأول',
+            'units_count' => 1,
+        ]);
+
+        $unit = Unit::create([
+            'building_id' => $building->id,
+            'floor_id' => $floor->id,
+            'name' => 'Unit R1',
+            'type' => 'apartment',
+            'activity' => 'residential',
+            'area' => 100.00,
+            'status' => 'reserved',
+        ]);
+
         $client = Client::create(['name' => 'Client 1', 'phone' => '+201000000001']);
 
-        $reservation = \App\Models\Reservation::create([
+        $reservation = Reservation::create([
             'client_id' => $client->id,
+            'building_id' => $building->id,
+            'unit_id' => $unit->id,
             'unit_type' => 'apartment',
             'unit_activity' => 'residential',
             'reservation_date' => now()->toDateString(),
             'status' => 'active',
         ]);
 
-        $headers = $this->authHeaders($admin['token']);
+        $this->withHeaders($this->authHeaders($admin['token']))
+            ->deleteJson('/api/v1/admin/clients/'.$client->id)
+            ->assertStatus(200)
+            ->assertJsonPath('data.deleted.reservations', 1)
+            ->assertJsonPath('data.deleted.units_released', 1);
 
-        $this->withHeaders($headers)
-            ->deleteJson('/api/v1/admin/clients/' . $client->id)
-            ->assertStatus(422)
-            ->assertJsonValidationErrors('client');
-
-        $reservation->update(['status' => 'cancelled', 'cancelled_at' => now(), 'cancellation_reason' => 'ملغي']);
-
-        $this->withHeaders($headers)
-            ->deleteJson('/api/v1/admin/clients/' . $client->id)
-            ->assertStatus(200);
-
-        $this->assertSoftDeleted($client);
+        $this->assertDatabaseMissing('clients', ['id' => $client->id]);
+        $this->assertDatabaseMissing('reservations', ['id' => $reservation->id]);
+        $this->assertDatabaseHas('units', ['id' => $unit->id, 'status' => 'available']);
     }
 
-    public function test_client_delete_is_blocked_by_a_cancelled_contract(): void
+    /** Every contract goes with the client, cancelled ones included. */
+    public function test_deleting_a_client_removes_cancelled_contracts_too(): void
     {
         $admin = $this->createAdmin();
 
-        $building = \App\Models\Building::create([
+        $building = Building::create([
             'name' => 'Building C',
             'number' => 'C1',
             'type' => 'building',
@@ -334,14 +362,14 @@ class ClientTest extends TestCase
             'floors_count' => 1,
         ]);
 
-        $floor = \App\Models\Floor::create([
+        $floor = Floor::create([
             'building_id' => $building->id,
             'floor_number' => 1,
             'display_name' => 'الأول',
             'units_count' => 1,
         ]);
 
-        $unit = \App\Models\Unit::create([
+        $unit = Unit::create([
             'building_id' => $building->id,
             'floor_id' => $floor->id,
             'name' => 'Unit C1',
@@ -353,8 +381,7 @@ class ClientTest extends TestCase
 
         $client = Client::create(['name' => 'Client 2', 'phone' => '+201000000002']);
 
-        // Any contract at all blocks the delete, even a cancelled one.
-        \App\Models\Contract::create([
+        $contract = Contract::create([
             'number' => '2026-9999',
             'type' => 'sale',
             'client_id' => $client->id,
@@ -369,10 +396,13 @@ class ClientTest extends TestCase
         ]);
 
         $this->withHeaders($this->authHeaders($admin['token']))
-            ->deleteJson('/api/v1/admin/clients/' . $client->id)
-            ->assertStatus(422)
-            ->assertJsonValidationErrors('client');
+            ->deleteJson('/api/v1/admin/clients/'.$client->id)
+            ->assertStatus(200)
+            ->assertJsonPath('data.deleted.contracts', 1);
 
-        $this->assertNotSoftDeleted($client);
+        $this->assertDatabaseMissing('clients', ['id' => $client->id]);
+        $this->assertDatabaseMissing('contracts', ['id' => $contract->id]);
+        // The unit was already available, so nothing is "released".
+        $this->assertDatabaseHas('units', ['id' => $unit->id, 'status' => 'available']);
     }
 }

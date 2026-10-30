@@ -3,21 +3,24 @@
 namespace App\Services\Clients;
 
 use App\Enums\AuditAction;
-use App\Enums\ReservationStatus;
 use App\Models\Client;
+use App\Models\Contract;
+use App\Models\Reservation;
 use App\Services\Audit\AuditLogger;
+use App\Services\Units\UnitService;
+use App\Services\Units\UnitTreeDeleter;
 use App\Support\Text\PhoneNormalizer;
 use App\Support\Transactions\Operation;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Validation\ValidationException;
 
 class ClientService
 {
     public function __construct(
         private Operation $operation,
-        private AuditLogger $audit
-    ) {
-    }
+        private AuditLogger $audit,
+        private UnitTreeDeleter $deleter,
+        private UnitService $units
+    ) {}
 
     public function create(array $data, $actor): Client
     {
@@ -38,19 +41,19 @@ class ClientService
 
             if ($duplicatePhone) {
                 $this->audit->log(
-action: AuditAction::REJECTED_OPERATION->value,
-            entityType: 'clients',
-            entityId: $client->id,
-            newValues: ['name' => $client->name, 'phone' => $client->phone, 'phone_2' => $client->phone_2],
-            reason: 'Client created with duplicate phone (warning only). Duplicate client ID: ' . $duplicatePhone->id,
+                    action: AuditAction::REJECTED_OPERATION->value,
+                    entityType: 'clients',
+                    entityId: $client->id,
+                    newValues: ['name' => $client->name, 'phone' => $client->phone, 'phone_2' => $client->phone_2],
+                    reason: 'Client created with duplicate phone (warning only). Duplicate client ID: '.$duplicatePhone->id,
                 );
             } else {
                 $this->audit->log(
-action: AuditAction::CREATE->value,
-            entityType: 'clients',
-            entityId: $client->id,
-            newValues: ['name' => $client->name, 'phone' => $client->phone, 'phone_2' => $client->phone_2],
-            reason: 'Client created by ' . $actor->name,
+                    action: AuditAction::CREATE->value,
+                    entityType: 'clients',
+                    entityId: $client->id,
+                    newValues: ['name' => $client->name, 'phone' => $client->phone, 'phone_2' => $client->phone_2],
+                    reason: 'Client created by '.$actor->name,
                 );
             }
 
@@ -104,7 +107,7 @@ action: AuditAction::CREATE->value,
         ]);
 
         $this->audit->log(
-action: AuditAction::UPDATE->value,
+            action: AuditAction::UPDATE->value,
             entityType: 'clients',
             entityId: $client->id,
             oldValues: $oldValues,
@@ -117,40 +120,59 @@ action: AuditAction::UPDATE->value,
                 'notes' => $data['notes'] ?? null,
             ])),
             reason: $duplicate
-                ? 'Client updated with duplicate phone (warning only). Duplicate client ID: ' . $duplicate->id
-                : 'Client updated by ' . $actor->name,
+                ? 'Client updated with duplicate phone (warning only). Duplicate client ID: '.$duplicate->id
+                : 'Client updated by '.$actor->name,
         );
 
         return $client->fresh();
     }
 
-    public function delete(Client $client, $actor): void
+    /**
+     * Delete a client for good, together with every deal they own: reservations with their
+     * deposits and contracts with their schedule, receipts and payments (owner decision
+     * 2026-10-30). Units left with nothing live go back to `available`; units that still have
+     * another client's deal keep their status. Returns the removed counts for the API response.
+     *
+     * @return array<string, int>
+     */
+    public function delete(Client $client, $actor): array
     {
-        // Soft delete is blocked if the client has an active reservation or any contract at all
-        // (BRIEF 2.4) - cancelled items still count as history.
-        $hasActiveReservation = $client->reservations()
-            ->where('status', ReservationStatus::ACTIVE->value)
-            ->exists();
+        return DB::transaction(function () use ($client, $actor) {
+            $oldValues = [
+                'name' => $client->name,
+                'phone' => $client->phone,
+                'phone_2' => $client->phone_2,
+                'national_id' => $client->national_id,
+                'notes' => $client->notes,
+            ];
 
-        if ($hasActiveReservation || $client->contracts()->exists()) {
-            throw ValidationException::withMessages([
-                'client' => __('clients.cannot_delete_with_reservation_or_contract'),
-            ]);
-        }
+            $contractIds = Contract::withTrashed()->where('client_id', $client->id)->pluck('id');
+            $reservationIds = Reservation::withTrashed()->where('client_id', $client->id)->pluck('id');
 
-        $oldValues = [
-            'name' => $client->name,
-            'phone' => $client->phone,
-        ];
+            // Remember the units before their deals disappear.
+            $unitIds = Contract::withTrashed()->whereIn('id', $contractIds)->pluck('unit_id')
+                ->merge(Reservation::withTrashed()->whereIn('id', $reservationIds)->pluck('unit_id'))
+                ->filter()
+                ->unique()
+                ->values();
 
-        $client->delete();
+            $deleted = $this->deleter->deleteContracts($contractIds)
+                + $this->deleter->deleteReservations($reservationIds);
 
-        $this->audit->log(
-            action: AuditAction::DELETE->value,
-            entityType: 'clients',
-            entityId: $client->id,
-            oldValues: $oldValues,
-            reason: 'Client deleted by ' . $actor->name,
-        );
+            $deleted['units_released'] = $this->units->releaseUnits($unitIds, $actor);
+
+            $client->forceDelete();
+
+            $this->audit->log(
+                action: AuditAction::DELETE->value,
+                entityType: 'clients',
+                entityId: $client->id,
+                oldValues: $oldValues,
+                reason: 'Client deleted with their reservations, contracts and payments by '.$actor->name,
+                meta: ['deleted' => $deleted],
+            );
+
+            return $deleted;
+        });
     }
 }

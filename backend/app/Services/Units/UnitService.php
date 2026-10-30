@@ -3,14 +3,19 @@
 namespace App\Services\Units;
 
 use App\Enums\AuditAction;
+use App\Enums\ContractStatus;
+use App\Enums\ReservationStatus;
 use App\Enums\UnitPurpose;
 use App\Enums\UnitStatus;
 use App\Models\Building;
+use App\Models\Contract;
 use App\Models\Floor;
+use App\Models\Reservation;
 use App\Models\Unit;
 use App\Services\Audit\AuditLogger;
 use App\Support\Money\Money;
 use App\Support\Transactions\Operation;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
@@ -259,6 +264,41 @@ class UnitService
 
             return $deleted + ['units' => 1];
         });
+    }
+
+    /**
+     * Put the given units back to `available` when nothing live is left on them (no non-cancelled
+     * contract, no active reservation). Used after the permanent client deletion removes their
+     * deals; a unit that still has another deal keeps its own status. Returns how many changed.
+     *
+     * @param  Collection<int, int>  $unitIds
+     */
+    public function releaseUnits(Collection $unitIds, $actor): int
+    {
+        $released = 0;
+
+        Unit::whereIn('id', $unitIds)->get()->each(function (Unit $unit) use (&$released, $actor) {
+            if ($unit->status === UnitStatus::AVAILABLE) {
+                return;
+            }
+
+            $hasLiveContract = Contract::where('unit_id', $unit->id)
+                ->where('status', '!=', ContractStatus::CANCELLED->value)
+                ->exists();
+
+            $hasActiveReservation = Reservation::where('unit_id', $unit->id)
+                ->where('status', ReservationStatus::ACTIVE->value)
+                ->exists();
+
+            if ($hasLiveContract || $hasActiveReservation) {
+                return;
+            }
+
+            $this->setStatus($unit, UnitStatus::AVAILABLE, 'Unit released after its client was deleted', $actor);
+            $released++;
+        });
+
+        return $released;
     }
 
     /**

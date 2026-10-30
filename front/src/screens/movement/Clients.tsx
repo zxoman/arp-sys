@@ -10,6 +10,7 @@ import {
   updateClient,
   type ApiClient,
   type ClientInput,
+  type DeletionCounts,
   type PageMeta,
 } from '@/lib/api'
 import { Text } from '@/components/ui'
@@ -33,6 +34,15 @@ import {
 import { codeOf, FormGrid, REQUIRED, SectionTitle, useNewShortcut, useShake, type Errors } from './shared'
 
 const SEARCH_DELAY_MS = 350
+
+/** « — معها 2 حجز، 1 عقد، 1 إيصال …» for the delete toast (empty when nothing was linked). */
+function clientDeletionSummary(deleted: DeletionCounts): string {
+  const parts: string[] = []
+  if (deleted.reservations) parts.push(`${deleted.reservations} حجز`)
+  if (deleted.contracts) parts.push(`${deleted.contracts} عقد`)
+  if (deleted.receipts) parts.push(`${deleted.receipts} إيصال`)
+  return parts.length ? ` — حُذف معها ${parts.join('، ')}` : ''
+}
 
 /** DataTable column key → API `sort` parameter. */
 const SORT_FIELDS: Record<string, string> = {
@@ -253,15 +263,14 @@ export default function Clients() {
     const target = toDelete
     setDeleting(true)
     try {
-      await deleteClient(target.id)
-      toast.success('تم حذف العميل', `«${target.name}»`)
+      const deleted = await deleteClient(target.id)
+      toast.success('تم حذف العميل نهائيًا', `«${target.name}»${clientDeletionSummary(deleted)}`)
       setToDelete(null)
       // Deleting the only row on a later page leaves an empty page; step back one.
       if (rows.length === 1 && page > 0) setPage((p) => p - 1)
       else reload()
     } catch (err) {
       if (isAuthError(err)) return lostSession()
-      // 422 here is the delete guard: an active reservation or any contract (BRIEF 2.4).
       toast.error('تعذّر حذف العميل', err instanceof ApiError ? err.message : undefined)
       setToDelete(null)
     } finally {
@@ -475,7 +484,7 @@ export default function Clients() {
         size="sm"
         tone="danger"
         icon={<IconTrash size={20} />}
-        title="حذف العميل؟"
+        title="حذف العميل نهائيًا؟"
         footer={
           <>
             <Btn variant="ghost" onClick={() => setToDelete(null)} disabled={deleting}>
@@ -488,7 +497,8 @@ export default function Clients() {
         }
       >
         <Text variant="body">
-          سيُحذف «{toDelete?.name}» من القائمة. لا يمكن الحذف إذا كان للعميل حجز نشط أو أي عقد (حتى الملغى).
+          سيُحذف «{toDelete?.name}» نهائيًا من الخادم مع كل حجوزاته وعقوده وإيصالاته ومدفوعاته، وترجع وحداته إلى
+          «متاحة». لا يمكن التراجع.
         </Text>
       </Modal>
     </div>
