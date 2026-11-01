@@ -562,6 +562,17 @@ export async function fetchAllBuildings(): Promise<ApiBuilding[]> {
   return fetchAllPages((page) => fetchBuildings({ page, perPage: 100 }))
 }
 
+/** `DELETE /admin/units/{id}` — permission `units.delete`.
+ * Permanent cascade: the unit goes with its reservations, contracts, receipts and payments, and its
+ * floor's unit counter is decremented.
+ */
+export async function deleteUnit(apiId: number): Promise<DeletionCounts> {
+  const data = (
+    await request<{ message: string; deleted?: DeletionCounts }>(`/admin/units/${apiId}`, { method: 'DELETE' })
+  ).data
+  return data.deleted ?? {}
+}
+
 /* ------------------------------------------------------------------ *
  * Clients
  * ------------------------------------------------------------------ */

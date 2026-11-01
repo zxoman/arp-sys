@@ -9,6 +9,7 @@ import {
   activityFromApi,
   clearToken,
   createUnit,
+  deleteUnit,
   fetchAllBuildings,
   fetchBuildingFloors,
   fetchUnits,
@@ -17,6 +18,7 @@ import {
   type ApiBuilding,
   type ApiFloor,
   type ApiUnit,
+  type DeletionCounts,
   type PageMeta,
   type UnitInput,
 } from '@/lib/api'
@@ -31,6 +33,8 @@ import {
   IconLayers,
   IconPencil,
   IconPlus,
+  IconTrash,
+  Modal,
   NumericInput,
   Select,
   StatusChip,
@@ -115,6 +119,15 @@ const isAuthError = (err: unknown) => err instanceof ApiError && (err.status ===
 /** «غير قابلة للبيع» units are off the market; otherwise show the API's automatic status. */
 const statusLabelOf = (u: ApiUnit) => (!u.is_sellable ? 'غير قابلة للبيع' : (u.status_label ?? 'متاحة'))
 
+/** « — معها 1 حجز، 1 عقد، 1 إيصال» for the delete toast (empty when nothing was linked). */
+function cascadeSummary(deleted: DeletionCounts): string {
+  const parts: string[] = []
+  if (deleted.reservations) parts.push(`${fmtNum(deleted.reservations)} حجز`)
+  if (deleted.contracts) parts.push(`${fmtNum(deleted.contracts)} عقد`)
+  if (deleted.receipts) parts.push(`${fmtNum(deleted.receipts)} إيصال`)
+  return parts.length ? ` — حُذف معها ${parts.join('، ')}` : ''
+}
+
 export default function Units() {
   const { logout } = useAuth()
   const toast = useToast()
@@ -124,6 +137,8 @@ export default function Units() {
   const [errors, setErrors] = useState<Errors<Key>>({})
   const [saving, setSaving] = useState(false)
   const [formRef, shake] = useShake<HTMLFormElement>()
+  const [toDelete, setToDelete] = useState<ApiUnit | null>(null)
+  const [deleting, setDeleting] = useState(false)
 
   // Auth + server-side table state (search is debounced; the page is 0-based).
   const [rows, setRows] = useState<ApiUnit[]>([])
@@ -241,6 +256,7 @@ export default function Units() {
   const lostSession = () => {
     clearToken()
     setMode(null)
+    setToDelete(null)
   }
 
   const buildingOf = (id: string) => buildings.find((b) => String(b.id) === id) ?? null
@@ -386,6 +402,26 @@ export default function Units() {
       else toast.error('تعذّر حفظ الوحدة', err instanceof Error ? err.message : undefined)
     } finally {
       setSaving(false)
+    }
+  }
+
+  const confirmDelete = async () => {
+    if (!toDelete) return
+    const target = toDelete
+    setDeleting(true)
+    try {
+      const deleted = await deleteUnit(target.id)
+      toast.success('تم حذف الوحدة نهائيًا', `«${target.name}»${cascadeSummary(deleted)}`)
+      setToDelete(null)
+      // Deleting the only row on a later page leaves an empty page; step back one.
+      if (rows.length === 1 && page > 0) setPage((p) => p - 1)
+      else reload()
+    } catch (err) {
+      if (isAuthError(err)) return lostSession()
+      toast.error('تعذّر حذف الوحدة', err instanceof ApiError ? err.message : undefined)
+      setToDelete(null)
+    } finally {
+      setDeleting(false)
     }
   }
 
@@ -547,12 +583,13 @@ export default function Units() {
         }}
         searchPlaceholder="ابحث برقم أو اسم الوحدة…"
         exportName="الوحدات"
-        actionsWidth="6rem"
+        actionsWidth="8rem"
         onRowClick={(u) => openRecord(u, 'view')}
         actions={(u) => (
           <div className="flex items-center gap-0.5">
             <IconBtn size="sm" icon={<IconEye size={16} />} label="عرض" onClick={() => openRecord(u, 'view')} />
             <IconBtn size="sm" icon={<IconPencil size={16} />} label="تعديل" onClick={() => openRecord(u, 'edit')} />
+            <IconBtn size="sm" icon={<IconTrash size={16} />} label="حذف" variant="danger" onClick={() => setToDelete(u)} />
           </div>
         )}
         emptyText={notLoaded ? 'لا توجد بيانات من الخادم.' : filtering ? 'لا توجد وحدات مطابقة للفلاتر.' : 'لا توجد وحدات مسجّلة. أضف أول وحدة.'}
@@ -746,6 +783,30 @@ export default function Units() {
           </FormGrid>
         </form>
       </Drawer>
+
+      <Modal
+        open={toDelete !== null}
+        onClose={() => !deleting && setToDelete(null)}
+        size="sm"
+        tone="danger"
+        icon={<IconTrash size={20} />}
+        title="حذف الوحدة نهائيًا؟"
+        footer={
+          <>
+            <Btn variant="ghost" onClick={() => setToDelete(null)} disabled={deleting}>
+              إلغاء
+            </Btn>
+            <Btn variant="danger" onClick={() => void confirmDelete()} loading={deleting}>
+              حذف
+            </Btn>
+          </>
+        }
+      >
+        <Text variant="body">
+          سيُحذف «{toDelete?.name}» نهائيًا من الخادم مع كل حجوزاته وعقوده وإيصالاته ومدفوعاته. لا يمكن
+          التراجع.
+        </Text>
+      </Modal>
     </div>
   )
 }
