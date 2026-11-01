@@ -96,6 +96,15 @@ The prototype stores its demo data in localStorage, but the **buildings, units, 
 - There is **no demo data**: `src/data.ts` and its generated dataset were deleted (owner request, 2026-11-01). The local store (`src/lib.ts`) starts from `emptyData()`, so every not-yet-linked screen (contract-end, renewals, «عقود الإيجار», the six per-status unit tabs, maintenance, owner unions, the income/maintenance/owners reports, records) renders its «لا توجد بيانات» state. `TODAY`/`TODAY_ISO` now come from `src/lib/domain.ts` and are the real date. `STORAGE_PREFIX` is `aqar.sales.v4` so old localStorage demo data is dropped on load.
 - The API allows CORS from any origin in development via `backend/config/cors.php`.
 
+## Styling: cascade layers
+- `src/index.css` and `src/kit/kit.css` both begin with `@layer theme, base, components, utilities;`. **Keep it.**
+  A production build emits `kit.css` as its own stylesheet that the browser loads *before* `index.css`, and
+  layer order is fixed by the first declaration — without that line, `components` lands below `base` and
+  Tailwind's preflight (`button { border-radius: 0; border-width: 0; background-color: transparent }`)
+  silently overrides every `.btn`, `.kit-*` and `.t-*` rule. The dev server injects styles in a different
+  order, so this class of bug is **invisible in dev** — always check a real build (`npm run build` +
+  `npx vite preview`) when touching component CSS.
+
 ## Loading speed
 
 Data loading is server-side on the eight collection pages, the wired reports and the header bell, so it is worth keeping the request count and the PHP cost down:
