@@ -18,7 +18,7 @@ import { Text } from '@/components/ui'
 import { useData } from '@/lib'
 import { cn } from '@/lib/cn'
 import { addMonths, type ISODate } from '@/lib/domain'
-import { TODAY_ISO } from '@/data'
+import { TODAY_ISO } from '@/lib/domain'
 
 /* ==================================================================
    Layout pieces: filter bar → KPIs → chart → table → actions

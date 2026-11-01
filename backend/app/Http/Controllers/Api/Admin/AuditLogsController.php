@@ -3,8 +3,8 @@
 namespace App\Http\Controllers\Api\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Http\Resources\Admin\AuditLogResource;
 use App\Models\AuditLog;
-use App\Policies\AuditLogPolicy;
 use Illuminate\Http\JsonResponse;
 
 class AuditLogsController extends Controller
@@ -35,12 +35,31 @@ class AuditLogsController extends Controller
             $query->where('occurred_at', '<=', $to);
         }
 
+        if ($search = trim((string) request('search'))) {
+            $like = "%{$search}%";
+            $query->where(function ($q) use ($like) {
+                $q->where('reason', 'like', $like)
+                    ->orWhere('entity_type', 'like', $like)
+                    ->orWhere('endpoint', 'like', $like);
+            });
+        }
+
+        $perPage = max(1, min((int) request('per_page', 20), 100));
         $logs = $query->orderBy('occurred_at', 'desc')
             ->with('user')
-            ->paginate();
+            ->paginate($perPage)
+            ->withQueryString();
 
         return response()->json([
-            'data' => $logs,
+            'data' => AuditLogResource::collection($logs),
+            'meta' => [
+                'current_page' => $logs->currentPage(),
+                'last_page' => $logs->lastPage(),
+                'per_page' => $logs->perPage(),
+                'total' => $logs->total(),
+                'from' => $logs->firstItem(),
+                'to' => $logs->lastItem(),
+            ],
         ]);
     }
 
@@ -49,7 +68,7 @@ class AuditLogsController extends Controller
         $this->authorize('view', $auditLog);
 
         return response()->json([
-            'data' => $auditLog->load('user'),
+            'data' => new AuditLogResource($auditLog->load('user')),
         ]);
     }
 }

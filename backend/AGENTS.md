@@ -28,11 +28,12 @@ must stay easy to change and be listed in `docs/DEFAULTS.md`.
 - Install: `/opt/lampp/bin/php /tmp/opencode/composer install`
 - Migrate + seed: `/opt/lampp/bin/php artisan migrate --seed`
 - Tests: `/opt/lampp/bin/php artisan test` (or `/opt/lampp/bin/php vendor/bin/pest`)
-- Demo data (GitHub Actions preview only): `php artisan db:seed --class=DemoSeeder` — needs an empty
-  database; it creates 2 buildings, 6 units, 4 clients, 3 contracts and 1 reservation through the normal
-  services. Never run it against real data.
 - Single test: `/opt/lampp/bin/php vendor/bin/pest --filter=Name`
-- System test: `/opt/lampp/bin/php artisan system:test --quick` | `--full`
+- System test (end-to-end, on a throwaway database — see below):
+  `DB_DATABASE=arp_sys_test SYSTEM_TEST_BASE_URL=http://127.0.0.1:8000 /opt/lampp/bin/php artisan system:test --quick`
+  (add `--full` for the backup/restore drill)
+- Backups: `php artisan backup:run --prune` | `backup:list` | `backup:verify` | `backup:restore --latest`
+  (docs in `docs/BACKUPS.md`)
 - Lint/format: `/opt/lampp/bin/php vendor/bin/pint`
 
 ## Running the dev API
@@ -46,6 +47,27 @@ must stay easy to change and be listed in `docs/DEFAULTS.md`.
   PHP edits need a server restart — that is the price of the workers.
 - CORS preflights are cached by the browser for 2h (`config/cors.php`, `max_age => 7200`); in dev the Vite
   server proxies `/api` so the front-end makes same-origin calls and sends no preflight at all.
+
+## System test (`system:test`)
+- It is a real HTTP end-to-end run, not unit tests: `migrate:fresh --seed`, then journeys that sign in and
+  walk the whole product. It needs a **running API** whose `DB_DATABASE` is the same test database, and
+  `SYSTEM_TEST_BASE_URL` pointing at it.
+- `SafetyGuard` refuses to run when `APP_ENV=production` or the database name does not look like a test
+  database; `SYSTEM_TEST_FORCE=true` overrides the name check for a deliberate scratch database.
+- Journeys (`app/SystemTest/Journeys`): `AuthJourney`, `PropertyJourney` (buildings/floors/units, editing every
+  field, immutability), `DealJourney` (client → reservation → contract → receipt → installment → cancel /
+  «مرتجع» → every report → client cascade), `AdminJourney` (settings in DB, users/roles with optimistic
+  locking, audit log), `BackupJourney` (create/verify/prune). `--full` adds the restore drill.
+- Reports land in `storage/app/system-test-reports/` as `.json` + `.txt`.
+
+## Deploying (real server)
+- `docs/DEPLOY.md` is the whole procedure: Ubuntu 26.04 packages (PHP 8.5 is the only version there),
+  MariaDB, `backend/.env`, nginx (`/api/` → `backend/public/index.php` over `php8.5-fpm`), the front built
+  with `VITE_API_URL=/api/v1` and rsynced to `front/dist`, then `php artisan optimize`.
+- Live now: `/var/www/arp-sys` on `192.168.1.50` (nginx + PHP 8.5 FPM + MariaDB 11.8), `APP_ENV=production`,
+  `APP_DEBUG=false`, base seed only. No queue worker and no scheduler are needed.
+- `SANCTUM_STATEFUL_DOMAINS` must not list the site's host: the SPA is Bearer-token only, and stateful mode
+  would demand CSRF and answer `419 CSRF token mismatch` on login.
 
 ## Build phases (stop after each one: run tests, summarize, list assumptions, wait for confirmation)
 1. Foundation: auth, users, roles/permissions, audit log, Money/Arabic/Phone/Clock helpers, guarded system:test skeleton
@@ -66,6 +88,14 @@ must stay easy to change and be listed in `docs/DEFAULTS.md`.
   (`project_name`, `project_address`) seeded once by `SettingsSeeder`, edited via `/api/v1/admin/settings`.
   The project statement report and `projects.*` / `reports.project` permissions were removed.
 - Seeders: `migrate --seed` creates the first admin (`admin` / `password123`) and empty project settings.
+- **Settings live in the database** (`settings` table, one row per field: project name/address, company
+  name/address/phone, both logos as data URLs, logo visibility, developer URL). `GET/PUT /api/v1/admin/settings`.
+  The front hydrates them on sign-in, so every device and every printout shows the same data.
+- **Audit log** (`GET /api/v1/admin/audit-logs`, paged + filterable) is readable in the app's «سجل العمليات»
+  screen. Every service writes through `AuditLogger`; the log is append-only.
+- **Unit editing:** every field stays editable after the unit is sold or rented, `area` and `price_per_meter`
+  included (owner decision 2026-11-01). Only `building_id` and `status` are never written by the API; status
+  is derived from reservations/contracts.
 - Unit purpose/sale fields (2026-10-28): `purpose` (sale|rent|both), `is_sellable` + `non_sellable_reason`,
   `sale_price` (overrides area x price_per_meter). Enforced on reservations and contracts; see BRIEF 2.3/2.5/2.6.
 - Clients (2026-10-28): `phone` + optional `phone_2`, both normalized and both covered by the duplicate warning and

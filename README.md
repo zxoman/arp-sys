@@ -31,39 +31,60 @@ npm install
 npm run dev                       # http://localhost:8443 (يوجّه /api إلى 127.0.0.1:8000)
 ```
 
+## النشر على خادم
+
+خادم واحد يشغّل nginx: الواجهة المبنية (`front/dist`) كملفات ثابتة، والـAPI عبر PHP-FPM على المسار
+`/api/`. لا حاجة إلى Node على الخادم. الخطوات كاملة (الحزم، قاعدة البيانات، `.env`، nginx، بناء الواجهة،
+التحديث لاحقًا) في `backend/docs/DEPLOY.md`.
+
+```bash
+cd front && VITE_API_URL=/api/v1 npm run build     # ثم انسخ front/dist إلى الخادم
+```
+
 ## الاختبارات والجودة
 
 ```bash
 cd backend
-php artisan test                  # 183 اختبار Pest
+php artisan test                  # 186 اختبار Pest (وحدات + ميزات)
 vendor/bin/pint                   # تنسيق الكود
 ```
+
+### اختبار النظام الكامل (end-to-end)
+
+`system:test` يمشي على النظام كله عبر HTTP حقيقي على قاعدة بيانات منفصلة: الدخول، المباني والوحدات
+(وتعديل كل الحقول)، العملاء والحجوزات والعقود والإيصالات والأقساط، الإلغاء/المرتجع، كل التقارير،
+حذف العميل المتسلسل، الإعدادات والمستخدمين والسجل، والنسخ الاحتياطي.
+
+```bash
+# يحتاج API شغّالًا على نفس قاعدة الاختبار
+PORT=8002 DB_DATABASE=arp_sys_test ./backend/scripts/serve.sh &
+cd backend
+DB_DATABASE=arp_sys_test SYSTEM_TEST_BASE_URL=http://127.0.0.1:8002 php artisan system:test --quick
+DB_DATABASE=arp_sys_test SYSTEM_TEST_BASE_URL=http://127.0.0.1:8002 php artisan system:test --full   # + تجربة استرجاع
+```
+
+التقارير تُكتب في `backend/storage/app/system-test-reports/`. الحماية (`SafetyGuard`) تمنع التشغيل على
+`APP_ENV=production` أو على قاعدة ليست «test».
+
+## النسخ الاحتياطي
+
+```bash
+cd backend
+php artisan backup:run --prune     # نسخة الآن + تدوير القديم
+php artisan backup:list            # الموجود
+php artisan backup:verify          # فحص سلامة الأرشيفات
+php artisan backup:restore --latest --force
+```
+
+كل نسخة أرشيف `.tar.gz` في `storage/app/backups` فيه قاعدة البيانات + مفاتيح `.env` الحساسة + بيان
+(counts). على السيرفر: `sudo backend/scripts/install-backup-timer.sh` يثبّت `arp-backup.timer` يوميًا.
+التفاصيل في `backend/docs/BACKUPS.md`.
 
 ```bash
 cd front
 npx tsc --noEmit
 npm run build
 ```
-
-## عرض مؤقت من GitHub Actions
-
-`.github/workflows/demo.yml` يشغّل المشروع كاملًا داخل الـjob ويفتح رابطًا عامًا مؤقتًا:
-
-1. Actions → **Demo preview (temporary public URL)** → **Run workflow** (يمكن تحديد المدة بالدقائق، والحد الأقصى 350).
-2. يظهر الرابط في صفحة التشغيل (**Environments → demo-preview** وفي **Summary**)، ويُطبع أيضًا في سجل خطوة «Open the public tunnel». يمكن قراءته من الطرفية أثناء التشغيل:
-   ```bash
-   gh api "repos/zxoman/arp-sys/deployments?environment=demo-preview&per_page=1" --jq '.[0].id' \
-     | xargs -I{} gh api "repos/zxoman/arp-sys/deployments/{}/statuses?per_page=1" --jq '.[0].environment_url'
-   ```
-3. الدخول: `admin` / `password123` — بيانات تجريبية فقط.
-
-كيف يعمل: يثبّت PHP 8.2 وNode 22، ينشئ قاعدة **SQLite** مؤقتة (`migrate --seed` + `DemoSeeder`)، يشغّل
-`php artisan serve` و`pnpm run dev`، ثم يفتح نفق Cloudflare (`trycloudflare.com`) إلى الواجهة، التي تمرّر
-`/api` إلى الخادم على نفس الأصل. يبقى الرابط حيًا حتى انتهاء مدة التشغيل (حد GitHub ست ساعات)، وأي تشغيل جديد
-يوقف السابق (`concurrency`). كل شيء يُحذف مع انتهاء الـjob.
-
-`DemoSeeder` (`backend/database/seeders/DemoSeeder.php`) يبني مبنىين و6 وحدات و4 عملاء وثلاثة عقود وحجزًا
-وبعض الإيصالات (منها ملغى) عبر خدمات الـAPI نفسها، ولا يعمل على قاعدة فيها مبانٍ أصلًا.
 
 ## ملاحظات
 

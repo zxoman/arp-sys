@@ -17,6 +17,7 @@ class UserResource extends JsonResource
             'phone' => $this->phone,
             'status' => $this->status?->value,
             'role' => $this->whenLoaded('role'),
+            'lock_version' => $this->lock_version,
             'last_login_at' => $this->last_login_at,
             'created_at' => $this->created_at,
         ];

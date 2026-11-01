@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react
 import { useAuth } from '@/lib/auth'
 import { egp, fmtDate, type ISODate } from '@/lib'
 import { addMonths } from '@/lib/domain'
-import { TODAY_ISO } from '@/data'
+import { TODAY_ISO } from '@/lib/domain'
 import {
   AnimatedNumber,
   Btn,

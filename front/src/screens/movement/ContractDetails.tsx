@@ -1,7 +1,7 @@
 import { useMemo, type ReactNode } from 'react'
 import { useData, egp, fmtDate, installmentRemaining, paymentLabel, type RentalContractTerms, type ScheduleItem } from '@/lib'
 import { diffDays, installmentStatus } from '@/lib/domain'
-import { TODAY_ISO } from '@/data'
+import { TODAY_ISO } from '@/lib/domain'
 import { Btn, GlassSurface, IconChevronNext, IconFile, IconWallet, SectionCard, StatusChip } from '@/kit'
 import { Text } from '@/components/ui'
 import { printDocument } from '@/kit/print'

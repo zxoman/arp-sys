@@ -1,6 +1,6 @@
 import { useMemo, useState, type ReactNode } from 'react'
 import { useData, egp, fmtDate, paymentLabel, upfrontLabel, type Client, type ISODate } from '@/lib'
-import { TODAY_ISO } from '@/data'
+import { TODAY_ISO } from '@/lib/domain'
 import { Combobox, DatePicker, GlassSurface, IconBuilding, IconCheckCircle, IconFile, IconLayers, IconPhone, IconUsers, IconWallet, LiquidTabs, Select, SummaryCard, type Column } from '@/kit'
 import { BarChart, DonutChart } from '@/kit/charts'
 import { Text } from '@/components/ui'

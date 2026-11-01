@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { useAuth } from '@/lib/auth'
 import { cn } from '@/lib/cn'
 import { useData, egp, fmtDate, type ISODate, type Settings } from '@/lib'
-import { TODAY_ISO } from '@/data'
+import { TODAY_ISO } from '@/lib/domain'
 import {
   ApiError,
   cancelReceipt,

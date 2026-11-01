@@ -153,22 +153,9 @@ class UnitService
                 ]);
             }
 
-            // Block editing area/price_per_meter when unit is sold
-            if ($unit->status === UnitStatus::SOLD) {
-                if (isset($data['area']) && $data['area'] !== $unit->area) {
-                    throw ValidationException::withMessages([
-                        'area' => __('units.cannot_edit_sold_unit'),
-                    ]);
-                }
-                if (isset($data['price_per_meter']) && $data['price_per_meter'] !== $unit->price_per_meter) {
-                    throw ValidationException::withMessages([
-                        'price_per_meter' => __('units.cannot_edit_sold_unit'),
-                    ]);
-                }
-            }
-
-            // Purpose / sale price / sellability are frozen once the unit is sold or rented.
-            $this->assertPurposeAndSaleFieldsUnlocked($unit, $data);
+            // Every field - area and price_per_meter included - stays editable after the unit is
+            // sold or rented (owner decision 2026-11-01). The contract keeps its own copy of the
+            // amount it was signed for; editing the unit never rewrites a signed contract.
 
             $purpose = $this->resolvePurpose($data, $unit);
             $isSellable = array_key_exists('is_sellable', $data) ? (bool) $data['is_sellable'] : (bool) $unit->is_sellable;
@@ -375,42 +362,6 @@ class UnitService
         return $reason;
     }
 
-    /**
-     * Purpose, sale price and the sellable flag can't change once the unit is sold or rented
-     * (same guard as area/price_per_meter).
-     */
-    private function assertPurposeAndSaleFieldsUnlocked(Unit $unit, array $data): void
-    {
-        if (! in_array($unit->status, [UnitStatus::SOLD, UnitStatus::RENTED], true)) {
-            return;
-        }
-
-        $changedField = null;
-
-        if (array_key_exists('purpose', $data) && $data['purpose'] !== null && $data['purpose'] !== $unit->purpose?->value) {
-            $changedField = 'purpose';
-        }
-
-        if (! $changedField && array_key_exists('is_sellable', $data) && (bool) $data['is_sellable'] !== (bool) $unit->is_sellable) {
-            $changedField = 'is_sellable';
-        }
-
-        if (! $changedField && array_key_exists('non_sellable_reason', $data) && trim((string) $data['non_sellable_reason']) !== (string) $unit->non_sellable_reason) {
-            $changedField = 'non_sellable_reason';
-        }
-
-        if (! $changedField && array_key_exists('sale_price', $data) && ! $this->sameMoney($data['sale_price'], $unit->sale_price)) {
-            $changedField = 'sale_price';
-        }
-
-        if ($changedField) {
-            throw ValidationException::withMessages([
-                $changedField => __('units.cannot_edit_locked_unit'),
-            ]);
-        }
-    }
-
-    /** Money equality without floats: compares the two amounts as decimals. */
     private function sameMoney($a, $b): bool
     {
         $a = $a === null ? null : (string) $a;

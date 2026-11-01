@@ -1,4 +1,4 @@
-// Pure, dependency-free helpers shared by the reducer (src/lib.ts) and the seed (src/data.ts).
+// Pure, dependency-free helpers shared by the reducer (src/lib.ts) and the screens.
 import type { Collection, Contract, ContractType, InstallmentStatus, Payment, RentalTerms } from '../lib'
 
 /** Calendar date as `YYYY-MM-DD` — no time or time zone, safe to persist as JSON. */
@@ -170,3 +170,10 @@ export function rentSchedule(
     amount: rentForYear(terms, Math.floor(i / 12) + 1),
   }))
 }
+
+/**
+ * The app's "today". Due/late calculations use the real date: there is no seeded date any more,
+ * so nothing may depend on a fixed one.
+ */
+export const TODAY = new Date()
+export const TODAY_ISO: ISODate = toISO(TODAY)

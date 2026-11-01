@@ -2158,3 +2158,165 @@ export async function fetchUnitStatus(params: { buildingId?: string; type?: stri
   const res = await request<ApiUnitStatus>(`/admin/reports/unit-status${query.size ? `?${query}` : ''}`)
   return res.data
 }
+
+/* ------------------------------------------------------------------ *
+ * Settings (single project data, stored in the database)
+ * ------------------------------------------------------------------ */
+
+/** `GET/PUT /admin/settings`. Booleans say whether a logo shows in the printed header. */
+export interface ApiSettings {
+  project_name: string
+  project_address: string
+  company_name: string
+  company_address: string
+  company_phone: string
+  company_logo: string
+  our_logo: string
+  show_company_logo: boolean
+  show_our_logo: boolean
+  developer_url: string
+}
+
+export async function fetchSettings(): Promise<ApiSettings> {
+  const res = await request<ApiSettings>('/admin/settings')
+  return res.data
+}
+
+export async function saveSettings(patch: Partial<ApiSettings>): Promise<ApiSettings> {
+  const res = await request<ApiSettings>('/admin/settings', {
+    method: 'PUT',
+    body: JSON.stringify(patch),
+  })
+  return res.data
+}
+
+/* ------------------------------------------------------------------ *
+ * Users (accounts) and roles
+ * ------------------------------------------------------------------ */
+
+export interface ApiAdminUser {
+  id: number
+  name: string
+  username: string
+  email: string | null
+  phone: string | null
+  status: 'active' | 'suspended' | null
+  role: ApiRole | null
+  lock_version: number
+  last_login_at: string | null
+  created_at: string | null
+}
+
+export interface ApiRole {
+  id: number
+  name: string
+  display_name: string | null
+  description: string | null
+  is_admin: boolean
+}
+
+export interface UserInput {
+  name: string
+  username: string
+  email?: string | null
+  phone?: string | null
+  password?: string
+  role_id: number
+  status?: 'active' | 'suspended'
+}
+
+/** `GET /admin/users` — paged, with `search` and `status` filters. */
+export async function fetchUsers(
+  params: { search?: string; status?: string; page?: number; perPage?: number } = {},
+): Promise<{ items: ApiAdminUser[]; meta: PageMeta }> {
+  const query = new URLSearchParams()
+  if (params.search) query.set('search', params.search)
+  if (params.status) query.set('status', params.status)
+  if (params.page) query.set('page', String(params.page))
+  if (params.perPage) query.set('per_page', String(params.perPage))
+  const res = await request<ApiAdminUser[]>(`/admin/users${query.size ? `?${query}` : ''}`)
+  return {
+    items: res.data,
+    meta: res.meta ?? { current_page: 1, last_page: 1, per_page: 15, total: res.data.length, from: 1, to: res.data.length },
+  }
+}
+
+export async function createUser(input: UserInput): Promise<ApiAdminUser> {
+  const res = await request<ApiAdminUser>('/admin/users', { method: 'POST', body: JSON.stringify(input) })
+  return res.data
+}
+
+/** `PUT /admin/users/{id}` — `lock_version` must be the one read with the row (optimistic lock). */
+export async function updateUser(apiId: number, input: Partial<UserInput> & { lock_version: number }): Promise<ApiAdminUser> {
+  const res = await request<ApiAdminUser>(`/admin/users/${apiId}`, { method: 'PUT', body: JSON.stringify(input) })
+  return res.data
+}
+
+export async function suspendUser(apiId: number): Promise<void> {
+  await request(`/admin/users/${apiId}/suspend`, { method: 'POST' })
+}
+
+export async function activateUser(apiId: number): Promise<void> {
+  await request(`/admin/users/${apiId}/activate`, { method: 'POST' })
+}
+
+export async function resetUserPassword(apiId: number, newPassword: string): Promise<void> {
+  await request(`/admin/users/${apiId}/reset-password`, {
+    method: 'POST',
+    body: JSON.stringify({ new_password: newPassword }),
+  })
+}
+
+export async function deleteUser(apiId: number): Promise<void> {
+  await request(`/admin/users/${apiId}`, { method: 'DELETE' })
+}
+
+/** Every role, for the user form's picker (there is no permissions screen yet). */
+export async function fetchRoles(): Promise<ApiRole[]> {
+  const first = await request<ApiRole[]>('/admin/roles?per_page=100')
+  return first.data
+}
+
+/* ------------------------------------------------------------------ *
+ * Audit log (سجل العمليات)
+ * ------------------------------------------------------------------ */
+
+export interface ApiAuditLog {
+  id: number
+  user_id: number | null
+  user_name?: string | null
+  actor_type: string | null
+  action: string | null
+  entity_type: string | null
+  entity_id: number | null
+  old_values: Record<string, unknown> | null
+  new_values: Record<string, unknown> | null
+  changed_fields: string[] | null
+  is_automatic: boolean
+  operation_id: string | null
+  ip: string | null
+  http_method: string | null
+  endpoint: string | null
+  reason: string | null
+  meta: Record<string, unknown> | null
+  occurred_at: string | null
+}
+
+/** `GET /admin/audit-logs` — paged, newest first, filterable. */
+export async function fetchAuditLogs(
+  params: { search?: string; action?: string; entityType?: string; userId?: number; from?: string; to?: string; page?: number } = {},
+): Promise<{ items: ApiAuditLog[]; meta: PageMeta }> {
+  const query = new URLSearchParams()
+  if (params.search) query.set('search', params.search)
+  if (params.action) query.set('action', params.action)
+  if (params.entityType) query.set('entity_type', params.entityType)
+  if (params.userId) query.set('user_id', String(params.userId))
+  if (params.from) query.set('from', params.from)
+  if (params.to) query.set('to', params.to)
+  if (params.page) query.set('page', String(params.page))
+  const res = await request<ApiAuditLog[]>(`/admin/audit-logs${query.size ? `?${query}` : ''}`)
+  return {
+    items: res.data,
+    meta: res.meta ?? { current_page: 1, last_page: 1, per_page: 20, total: res.data.length, from: 1, to: res.data.length },
+  }
+}

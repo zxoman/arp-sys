@@ -1,6 +1,7 @@
 import { useId, useMemo, useState } from 'react'
 import { Text } from '@/components/ui'
 import { useData, type Settings as AppSettings } from '@/lib'
+import { ApiError, clearToken, saveSettings } from '@/lib/api'
 import {
   FormFooter,
   IconBuilding,
@@ -35,6 +36,7 @@ export default function Settings() {
   const [draft, setDraft] = useState<AppSettings>(settings)
   const [errors, setErrors] = useState<Errors>({})
   const [perf, setPerf] = useState<PerfMode>(getPerfMode)
+  const [saving, setSaving] = useState(false)
   const dirty = !same(draft, settings)
   const { prompt } = useUnsaved(dirty)
 
@@ -52,24 +54,67 @@ export default function Settings() {
     return Object.keys(e).length === 0
   }
 
-  const save = () => {
+  /**
+   * Project/company data is stored in the API's `settings` table (one row per field), so every
+   * browser and every printed document shows the same values.
+   */
+  const save = async () => {
     if (!dirty) return toast.info('لا توجد تغييرات للحفظ')
     if (!validate()) return toast.error('تحقق من الحقول المعلَّمة')
     const payload: AppSettings = {
       ...draft,
       projectName: draft.projectName.trim(),
+      projectAddress: (draft.projectAddress ?? '').trim(),
       companyName: draft.companyName.trim(),
       companyAddress: draft.companyAddress.trim(),
       companyPhone: draft.companyPhone.trim(),
       developerUrl: (draft.developerUrl ?? '').trim(),
     }
-    dispatch({ type: 'UPDATE_SETTINGS', payload })
-    setDraft(payload)
-    toast.success('تم حفظ الإعدادات', 'ستظهر التغييرات في كل المستندات المطبوعة.')
+
+    setSaving(true)
+    try {
+      const saved = await saveSettings({
+        project_name: payload.projectName,
+        project_address: payload.projectAddress ?? '',
+        company_name: payload.companyName,
+        company_address: payload.companyAddress,
+        company_phone: payload.companyPhone,
+        company_logo: payload.companyLogo,
+        our_logo: payload.ourLogo,
+        show_company_logo: payload.showCompanyLogo,
+        show_our_logo: payload.showOurLogo,
+        developer_url: payload.developerUrl ?? '',
+      })
+      // Mirror exactly what the server now holds.
+      dispatch({
+        type: 'HYDRATE_SETTINGS',
+        payload: {
+          projectName: saved.project_name,
+          projectAddress: saved.project_address,
+          companyName: saved.company_name,
+          companyAddress: saved.company_address,
+          companyPhone: saved.company_phone,
+          companyLogo: saved.company_logo,
+          ourLogo: saved.our_logo,
+          showCompanyLogo: saved.show_company_logo,
+          showOurLogo: saved.show_our_logo,
+          developerUrl: saved.developer_url,
+        },
+      })
+      toast.success('تم حفظ الإعدادات', 'حُفظت في قاعدة البيانات وستظهر في كل الأجهزة والمستندات المطبوعة.')
+    } catch (err) {
+      if (err instanceof ApiError && (err.status === 401 || err.status === 419)) {
+        clearToken()
+        return
+      }
+      toast.error('تعذّر حفظ الإعدادات', err instanceof Error ? err.message : undefined)
+    } finally {
+      setSaving(false)
+    }
   }
 
-  useShortcutAction('save', save)
-  useShortcutAction('primary', save)
+  useShortcutAction('save', () => void save())
+  useShortcutAction('primary', () => void save())
 
   const changePerf = (mode: PerfMode) => {
     setPerf(mode)
@@ -186,19 +231,19 @@ export default function Settings() {
             <PrintSection title="بيانات العميل">
               <PrintFields
                 items={[
-                  ['الاسم', 'أحمد محمد علي'],
-                  ['الهاتف', <bdi dir="ltr">0100-000-0000</bdi>],
-                  ['الوحدة', 'شقة رقم 12 — الدور 3'],
-                  ['المبنى', 'برج النخيل'],
+                  ['الاسم', '—'],
+                  ['الهاتف', '—'],
+                  ['الوحدة', '—'],
+                  ['المبنى', '—'],
                 ]}
               />
             </PrintSection>
             <PrintTable
               headers={['#', 'تاريخ الاستحقاق', 'المبلغ']}
               rows={[
-                [1, '01/01/2026', '25,000 ج.م'],
-                [2, '01/02/2026', '25,000 ج.م'],
-                [3, '01/03/2026', '25,000 ج.م'],
+                [1, '—', '—'],
+                [2, '—', '—'],
+                [3, '—', '—'],
               ]}
             />
           </PrintLayout>
@@ -209,7 +254,8 @@ export default function Settings() {
 
       <FormFooter
         dirty={dirty}
-        onSave={save}
+        saving={saving}
+        onSave={() => void save()}
         saveLabel="حفظ الإعدادات"
         onCancel={dirty ? () => (setDraft(settings), setErrors({})) : undefined}
         cancelLabel="تراجع"
@@ -303,11 +349,14 @@ function Switch({
   )
 }
 
+/**
+ * Placeholder rows for the Excel preview. The app ships no demo data, so the mockup only shows the
+ * column layout and the late-row styling (first row), never fake clients or amounts.
+ */
 const XL_ROWS: { n: string; client: string; unit: string; due: string; amount: string; days: number; late: boolean }[] = [
-  { n: 'S-2025-014', client: 'أحمد محمد علي', unit: 'شقة 12', due: '01/08/2026', amount: '25,000', days: 86, late: true },
-  { n: 'S-2025-021', client: 'منى حسن سالم', unit: 'شقة 7', due: '15/08/2026', amount: '18,500', days: 72, late: true },
-  { n: 'R-2026-003', client: 'خالد إبراهيم', unit: 'محل 2', due: '01/11/2026', amount: '9,000', days: 0, late: false },
-  { n: 'S-2025-030', client: 'سارة عادل', unit: 'شقة 21', due: '10/11/2026', amount: '30,000', days: 0, late: false },
+  { n: '—', client: '—', unit: '—', due: '—', amount: '—', days: 0, late: true },
+  { n: '—', client: '—', unit: '—', due: '—', amount: '—', days: 0, late: false },
+  { n: '—', client: '—', unit: '—', due: '—', amount: '—', days: 0, late: false },
 ]
 
 function ExcelMockup() {
@@ -334,7 +383,7 @@ function ExcelMockup() {
           </thead>
           <tbody>
             {XL_ROWS.map((r, i) => (
-              <tr key={r.n} className={r.late ? 'bg-[#FEE2E2] font-bold text-[#991B1B] outline outline-2 -outline-offset-2 outline-[#DC2626]' : i % 2 ? 'bg-[#F8FAFC]' : ''}>
+              <tr key={i} className={r.late ? 'bg-[#FEE2E2] font-bold text-[#991B1B] outline outline-2 -outline-offset-2 outline-[#DC2626]' : i % 2 ? 'bg-[#F8FAFC]' : ''}>
                 {[i + 1, r.n, r.client, r.unit, r.due, r.amount, r.days || '—'].map((v, j) => (
                   <td key={j} className="border border-[#CBD5E1] px-1.5 py-1.5">
                     {v}

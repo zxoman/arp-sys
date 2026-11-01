@@ -7,7 +7,6 @@ use App\Http\Requests\Users\StoreUserRequest;
 use App\Http\Requests\Users\UpdateUserRequest;
 use App\Http\Resources\Auth\UserResource;
 use App\Models\User;
-use App\Policies\UserPolicy;
 use App\Services\Users\UserService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -20,10 +19,35 @@ class UsersController extends Controller
     {
         $this->authorize('viewAny', User::class);
 
-        $users = User::with('role')->orderBy('created_at', 'desc')->paginate();
+        $query = User::query()->with('role');
+
+        if ($search = trim((string) request('search'))) {
+            $like = "%{$search}%";
+            $query->where(function ($q) use ($like) {
+                $q->where('name', 'like', $like)
+                    ->orWhere('username', 'like', $like)
+                    ->orWhere('email', 'like', $like)
+                    ->orWhere('phone', 'like', $like);
+            });
+        }
+
+        if ($status = request('status')) {
+            $query->where('status', $status);
+        }
+
+        $perPage = max(1, min((int) request('per_page', 15), 100));
+        $users = $query->orderBy('created_at', 'desc')->paginate($perPage)->withQueryString();
 
         return response()->json([
             'data' => UserResource::collection($users),
+            'meta' => [
+                'current_page' => $users->currentPage(),
+                'last_page' => $users->lastPage(),
+                'per_page' => $users->perPage(),
+                'total' => $users->total(),
+                'from' => $users->firstItem(),
+                'to' => $users->lastItem(),
+            ],
         ]);
     }
 

@@ -2,10 +2,6 @@
 
 namespace App\SystemTest;
 
-use App\Support\Clock\FrozenClock;
-use Illuminate\Contracts\Console\Kernel;
-use Illuminate\Support\Str;
-
 class SafetyGuard
 {
     /**
@@ -16,9 +12,10 @@ class SafetyGuard
     public static function ensureTestEnvironment(): void
     {
         $appEnv = config('app.env', 'production');
-        $dbName = config('database.connections.mysql.database', '');
-        $dbHost = config('database.connections.mysql.host', '127.0.0.1');
-        $dbSocket = config('database.connections.mysql.unix_socket', '');
+        $driver = config('database.default', 'mysql');
+        $dbName = (string) config("database.connections.{$driver}.database", '');
+        $dbHost = (string) config("database.connections.{$driver}.host", '127.0.0.1');
+        $dbSocket = (string) config("database.connections.{$driver}.unix_socket", '');
 
         // APP_ENV must not be production
         if ($appEnv === 'production') {
@@ -27,14 +24,17 @@ class SafetyGuard
             );
         }
 
-        // Database name must clearly identify a test database
-        $isTestDb = preg_match('/(^|[^a-zA-Z])test([^a-zA-Z]|$)/i', $dbName)
-            || str_contains(strtolower($dbName), 'test')
-            || str_contains(strtolower($dbName), '_testing');
+        // An explicit opt-in for a scratch database whose name does not say "test".
+        if (filter_var(env('SYSTEM_TEST_FORCE', false), FILTER_VALIDATE_BOOLEAN)) {
+            return;
+        }
 
-        if (!$isTestDb) {
+        // Database name must clearly identify a test database
+        $isTestDb = self::isTestDatabase($dbName) || $driver === 'sqlite' && str_contains($dbName, 'test');
+
+        if (! $isTestDb) {
             throw new \RuntimeException(
-                'Safety guard aborted: database name ("' . $dbName . '") does not look like a test database.'
+                'Safety guard aborted: database name ("'.$dbName.'") does not look like a test database.'
             );
         }
 

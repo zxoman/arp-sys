@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useData, egp, fmtDate, type ContractSummary, type ContractType, type ISODate } from '@/lib'
-import { TODAY_ISO } from '@/data'
+import { ApiError, cancelContract, clearToken, fetchContracts, type ApiContract } from '@/lib/api'
 import {
   Btn,
   Combobox,
@@ -17,6 +16,8 @@ import {
   useToast,
   type Column,
 } from '@/kit'
+import { egp, fmtDate, type ISODate } from '@/lib'
+import { TODAY_ISO } from '@/lib/domain'
 import {
   CONTRACT_TYPE_TONE,
   contractTypeLabel,
@@ -33,41 +34,142 @@ import {
 import { serialColumn } from '@/kit/codes'
 import { CODE_LABEL } from '@/lib/codes'
 
-/** Return details; the Contract model has no fields for them, so they're kept per contract. */
-type ReturnInfo = { id: string; date: ISODate; reason: string; fee: number; refund: number; dues?: number }
+/**
+ * The API has no columns for the administrative fee / refunded amount, so those two numbers stay a
+ * browser-side note per contract. The cancellation itself — status, date, reason and freeing the
+ * unit — is all server-side (`POST /admin/contracts/{id}/cancel`).
+ */
+type ReturnInfo = { id: string; date: ISODate; reason: string; fee: number; refund: number }
 
 type Row = {
   id: string
   number: string
-  type: ContractType
-  ended: boolean
+  type: 'sale' | 'rent'
   clientName: string
   unitLabel: string
   paid: number
+  cancelledAt: string | null
+  cancelReason: string | null
   info: ReturnInfo | null
 }
 
-type Draft = { type: ContractType; contractId: string | null; date: ISODate | null; reason: string; fee: number | null; refund: number | null; refundTouched: boolean }
+type Draft = {
+  type: (typeof TYPES)[number]
+  contractId: string | null
+  date: ISODate | null
+  reason: string
+  fee: number | null
+  refund: number | null
+  refundTouched: boolean
+}
 type Key = 'contractId' | 'date' | 'reason' | 'fee' | 'refund'
 
-const EMPTY: Draft = { type: 'بيع', contractId: null, date: TODAY_ISO, reason: '', fee: null, refund: null, refundTouched: false }
+const TYPES = ['بيع', 'إيجار'] as const
+const TYPE_TO_API: Record<(typeof TYPES)[number], 'sale' | 'rent'> = { بيع: 'sale', إيجار: 'rent' }
+const API_TO_TYPE: Record<'sale' | 'rent', (typeof TYPES)[number]> = { sale: 'بيع', rent: 'إيجار' }
+
+const EMPTY: Draft = {
+  type: 'بيع',
+  contractId: null,
+  date: TODAY_ISO,
+  reason: '',
+  fee: null,
+  refund: null,
+  refundTouched: false,
+}
 const req = 'هذا الحقل مطلوب'
-const TYPES: readonly ContractType[] = ['بيع', 'إيجار']
 
-/** Everything collected on the contract, refundable deposit included. */
-const collected = (s: ContractSummary) => s.totalPaid + s.securityDepositPaid
-/** What a return refunds before the fee: a sale gives back what was paid, a lease only its deposit. */
-const refundBase = (s: ContractSummary) => (s.type === 'بيع' ? s.totalPaid : s.securityDepositPaid)
+const isAuthError = (err: unknown) => err instanceof ApiError && (err.status === 401 || err.status === 419)
+const money = (value: string | number | null | undefined) => Number(value ?? 0)
 
+const contractCode = (c: Pick<ApiContract, 'id' | 'number'>) => c.number || `C-${c.id}`
+
+/** Everything the contract has actually collected. */
+const collected = (c: ApiContract) => money(c.paid_total)
+
+/**
+ * What a return can refund before the fee: a sale gives back what was paid; a lease gives back the
+ * agreed security deposit (its own installments are rent, not a refundable deposit).
+ */
+const refundBase = (c: ApiContract) => (c.type === 'sale' ? collected(c) : money(c.security_deposit))
+
+const unitLabelOf = (c: ApiContract) =>
+  [c.building_name, c.unit_name].filter(Boolean).join(' — ') || '—'
+
+const toRow = (c: ApiContract, info: ReturnInfo | null): Row => ({
+  id: String(c.id),
+  number: contractCode(c),
+  type: c.type,
+  clientName: c.client_name ?? '—',
+  unitLabel: unitLabelOf(c),
+  paid: collected(c),
+  cancelledAt: c.cancelled_at,
+  cancelReason: c.cancellation_reason,
+  info,
+})
+
+/**
+ * «المرتجعات وإنهاء العقود» — a return (sale) or a lease termination is one server operation:
+ * `POST /admin/contracts/{id}/cancel`, which marks the contract cancelled, cancels its remaining
+ * installments and frees the unit. The list below reads the cancelled contracts from the API, so a
+ * contract cancelled anywhere in the app shows up here immediately.
+ */
 export default function ContractEnd() {
-  const { contracts, clients, units, buildings, installments, contractSummary, dispatch } = useData()
   const toast = useToast()
   const { confirm, dialog: confirmDialog } = useConfirm()
   const returns = usePersistentList<ReturnInfo>(RETURNS_KEY)
+
+  const [rows, setRows] = useState<ApiContract[]>([])
+  const [active, setActive] = useState<ApiContract[]>([])
+  const [loading, setLoading] = useState(false)
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [reloadKey, setReloadKey] = useState(0)
+
   const [open, setOpen] = useState(false)
   const [draft, setDraft] = useState<Draft>(EMPTY)
   const [errors, setErrors] = useState<Errors<Key>>({})
+  const [saving, setSaving] = useState(false)
   const [formRef, shake] = useShake<HTMLFormElement>()
+
+  // The cancelled contracts (what this screen lists) and the cancellable ones (its picker).
+  useEffect(() => {
+    let alive = true
+    setLoading(true)
+    setLoadError(null)
+    Promise.all([
+      fetchContracts({ status: 'cancelled', perPage: 100 }),
+      fetchContracts({ status: 'active,draft', perPage: 100 }),
+    ])
+      .then(([cancelled, ongoing]) => {
+        if (!alive) return
+        setRows(cancelled.items)
+        setActive(ongoing.items)
+      })
+      .catch((err: unknown) => {
+        if (!alive) return
+        setRows([])
+        if (isAuthError(err)) {
+          clearToken()
+          return
+        }
+        setLoadError(err instanceof Error ? err.message : 'تعذّر تحميل المرتجعات من الخادم')
+      })
+      .finally(() => {
+        if (alive) setLoading(false)
+      })
+    return () => {
+      alive = false
+    }
+  }, [reloadKey])
+
+  const reload = () => setReloadKey((k) => k + 1)
+
+  const infoById = useMemo(() => new Map(returns.items.map((r) => [r.id, r])), [returns.items])
+
+  const tableRows = useMemo<Row[]>(
+    () => rows.map((c) => toRow(c, infoById.get(String(c.id)) ?? null)),
+    [rows, infoById],
+  )
 
   const openNew = (patch: Partial<Draft> = {}) => {
     setDraft({ ...EMPTY, ...patch })
@@ -79,69 +181,44 @@ export default function ContractEnd() {
   // «إرجاع» / «إنهاء» on the contract details page opens the form for that contract.
   useEffect(() => {
     const id = takeReturnPrefill()
-    const c = id ? contracts.find((x) => x.id === id) : undefined
-    if (c) openNew({ type: c.type, contractId: c.id })
+    if (!id) return
+    fetchContracts({ status: 'active,draft', perPage: 100 })
+      .then((result) => {
+        const found = result.items.find((c) => String(c.id) === id)
+        if (found) openNew({ type: API_TO_TYPE[found.type], contractId: id })
+      })
+      .catch(() => {
+        // The drawer can still be opened manually.
+      })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const clientName = useMemo(() => new Map(clients.map((c) => [c.id, c.fullName])), [clients])
-  const unitLabel = useMemo(() => {
-    const bName = new Map(buildings.map((b) => [b.id, b.name]))
-    return new Map(units.map((u) => [u.id, `${bName.get(u.buildingId) ?? ''} — ${u.number}`]))
-  }, [units, buildings])
-  const infoById = useMemo(() => new Map(returns.items.map((r) => [r.id, r])), [returns.items])
-
-  const paidOf = (id: string) => {
-    const s = contractSummary(id)
-    return s ? collected(s) : 0
-  }
-
-  const rows = useMemo<Row[]>(
-    () =>
-      contracts
-        .filter((c) => c.status === 'مرتجع' || (c.type === 'إيجار' && c.status === 'منتهي' && infoById.has(c.id)))
-        .map((c) => ({
-          id: c.id,
-          number: c.number,
-          type: c.type,
-          ended: c.status !== 'مرتجع',
-          clientName: clientName.get(c.clientId) ?? '—',
-          unitLabel: unitLabel.get(c.unitId) ?? '—',
-          paid: paidOf(c.id),
-          info: infoById.get(c.id) ?? null,
-        })),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [contracts, clientName, unitLabel, infoById, contractSummary],
-  )
-
+  const wantedType = TYPE_TO_API[draft.type]
   const options = useMemo(
     () =>
-      contracts
-        .filter((c) => c.type === draft.type && (c.status === 'نشط' || (c.type === 'بيع' && c.status === 'مكتمل')))
+      active
+        .filter((c) => c.type === wantedType)
         .map((c) => ({
-          value: c.id,
-          label: `${c.number} — ${clientName.get(c.clientId) ?? '—'}`,
-          description: `${contractTypeLabel(c.type)} · ${unitLabel.get(c.unitId) ?? ''}`,
+          value: String(c.id),
+          label: `${contractCode(c)} — ${c.client_name ?? '—'}`,
+          description: `${contractTypeLabel(API_TO_TYPE[c.type])} · ${unitLabelOf(c)}`,
         })),
-    [contracts, clientName, unitLabel, draft.type],
+    [active, wantedType],
   )
 
-  const contract = contracts.find((c) => c.id === draft.contractId) ?? null
-  const summary = contract ? contractSummary(contract.id) : null
-  const isSale = draft.type !== 'إيجار'
-  const base = summary ? refundBase(summary) : 0
-  const baseLabel = isSale ? 'إجمالي المدفوع' : 'التأمين المحصّل'
-  const endDate = draft.date ?? TODAY_ISO
+  const contract = active.find((c) => String(c.id) === draft.contractId) ?? null
+  const isSale = draft.type === 'بيع'
+  const base = contract ? refundBase(contract) : 0
+  const baseLabel = isSale ? 'إجمالي المدفوع' : 'التأمين المتفق عليه'
   const unpaid = useMemo(
-    () => (contract ? installments.filter((i) => i.contractId === contract.id && i.amount - i.paidAmount > 0).sort((a, b) => a.seq - b.seq) : []),
-    [contract, installments],
+    () =>
+      (contract?.installments ?? [])
+        .filter((i) => money(i.amount) - money(i.paid_amount) > 0)
+        .sort((a, b) => a.sequence_number - b.sequence_number),
+    [contract],
   )
-  const unpaidTotal = unpaid.reduce((s, i) => s + i.amount - i.paidAmount, 0)
-  /** Rent already due on the termination date and still unpaid; later months are cancelled. */
-  const dues = isSale ? 0 : unpaid.filter((i) => i.dueDate <= endDate).reduce((s, i) => s + i.amount - i.paidAmount, 0)
-  const cancelled = isSale ? [] : unpaid.filter((i) => i.dueDate > endDate && i.paidAmount === 0)
-  const autoRefund = Math.max(0, base - dues - (draft.fee ?? 0))
-  const owed = Math.max(0, dues + (draft.fee ?? 0) - base)
+  const unpaidTotal = unpaid.reduce((s, i) => s + money(i.amount) - money(i.paid_amount), 0)
+  const autoRefund = Math.max(0, base - (draft.fee ?? 0))
   const refund = draft.refundTouched ? (draft.refund ?? 0) : autoRefund
 
   const update = (patch: Partial<Draft>) => {
@@ -156,65 +233,132 @@ export default function ContractEnd() {
   const save = async () => {
     const e: Errors<Key> = {}
     if (!draft.contractId) e.contractId = req
-    if (!draft.date) e.date = req
-    else if (contract && draft.date < contract.date) e.date = 'تاريخ الإرجاع قبل تاريخ العقد'
-    if (!isSale && (draft.fee ?? 0) < 0) e.fee = 'قيمة غير صحيحة'
-    if (isSale && (draft.fee ?? 0) > base) e.fee = `الخصم أكبر من ${baseLabel}`
+    else if (!draft.reason.trim()) e.reason = 'سبب الإرجاع مطلوب ليُسجَّل في العقد'
+    if ((draft.fee ?? 0) > base) e.fee = `الخصم أكبر من ${baseLabel}`
     if (refund > base) e.refund = `المبلغ المرتد أكبر من ${baseLabel}`
     setErrors(e)
     if (Object.keys(e).length) return shake()
+    if (!contract) return
+
     const ok = await confirm({
       title: isSale ? 'تأكيد إرجاع العقد؟' : 'تأكيد إنهاء عقد الإيجار؟',
-      description: isSale ? 'سيُلغى العقد وتصبح الوحدة «مرتجعة». لا يمكن التراجع عن هذا الإجراء.' : 'سيُنهى العقد وتصبح الوحدة «متاحة» وتُلغى الأشهر القادمة غير المسددة.',
+      description: isSale
+        ? 'سيُلغى العقد وتصبح الوحدة «متاحة» وتُلغى أقساطه غير المسددة. لا يمكن التراجع.'
+        : 'سيُلغى العقد وتصبح الوحدة «متاحة» وتُلغى أقساطه غير المسددة. لا يمكن التراجع.',
       details: [
-        ['العميل', clientName.get(contract!.clientId) ?? '—'],
-        ['العقد', contract!.number],
-        ['الوحدة', unitLabel.get(contract!.unitId) ?? '—'],
+        ['العميل', contract.client_name ?? '—'],
+        ['العقد', contractCode(contract)],
+        ['الوحدة', unitLabelOf(contract)],
         [isSale ? 'يُرد للعميل' : 'يُرد من التأمين', egp(refund)],
       ],
       confirmLabel: isSale ? 'تأكيد الإرجاع' : 'تأكيد الإنهاء',
     })
     if (!ok) return
-    if (isSale) {
-      dispatch({ type: 'RETURN_CONTRACT', payload: { id: contract!.id } })
-      returns.upsert({ id: contract!.id, date: draft.date!, reason: draft.reason.trim(), fee: draft.fee ?? 0, refund })
-      toast.success('تم تسجيل المرتجع', `${contract!.number} — يُرد للعميل ${egp(refund)}، والوحدة أصبحت «مرتجعة»`)
-    } else {
-      dispatch({ type: 'END_LEASE', payload: { id: contract!.id, date: draft.date! } })
-      returns.upsert({ id: contract!.id, date: draft.date!, reason: draft.reason.trim(), fee: draft.fee ?? 0, refund, dues })
-      toast.success('تم إنهاء عقد الإيجار', `${contract!.number} — يُرد من التأمين ${egp(refund)}، والوحدة أصبحت «متاحة»`)
+
+    setSaving(true)
+    try {
+      await cancelContract(contract.id, draft.reason.trim())
+      // Fee/refund are a local note: the API has no columns for them (see ReturnInfo).
+      returns.upsert({
+        id: String(contract.id),
+        date: draft.date ?? TODAY_ISO,
+        reason: draft.reason.trim(),
+        fee: draft.fee ?? 0,
+        refund,
+      })
+      toast.success(
+        isSale ? 'تم تسجيل المرتجع' : 'تم إنهاء عقد الإيجار',
+        `${contractCode(contract)} — الوحدة أصبحت «متاحة».`,
+      )
+      setOpen(false)
+      reload()
+    } catch (err) {
+      if (isAuthError(err)) {
+        clearToken()
+        setOpen(false)
+        return
+      }
+      toast.error('تعذّر إلغاء العقد', err instanceof ApiError ? err.message : undefined)
+    } finally {
+      setSaving(false)
     }
-    setOpen(false)
   }
 
   const columns = useMemo<Column<Row>[]>(
     () => [
-      { key: 'number', header: CODE_LABEL.return, cell: (r) => <span className="font-semibold tabular-nums text-fg">{r.number}</span> },
+      {
+        key: 'number',
+        header: CODE_LABEL.return,
+        cell: (r) => <span className="font-semibold tabular-nums text-fg">{r.number}</span>,
+      },
       serialColumn('return', (r) => r.number),
       {
         key: 'type',
         header: 'النوع',
-        cell: (r) => <StatusChip status={contractTypeLabel(r.type)} tone={CONTRACT_TYPE_TONE[r.type]} size="sm" />,
+        value: (r) => contractTypeLabel(API_TO_TYPE[r.type]),
+        cell: (r) => (
+          <StatusChip status={API_TO_TYPE[r.type]} tone={CONTRACT_TYPE_TONE[API_TO_TYPE[r.type]]} size="sm" />
+        ),
       },
       { key: 'clientName', header: 'العميل' },
       { key: 'unitLabel', header: 'الوحدة' },
-      { key: 'date', header: 'تاريخ الإرجاع', value: (r) => r.info?.date ?? '', cell: (r) => <span className="tabular-nums">{fmtDate(r.info?.date)}</span> },
-      { key: 'paid', header: 'إجمالي المحصّل', align: 'end', cell: (r) => <span className="tabular-nums">{egp(r.paid)}</span> },
-      { key: 'fee', header: 'الخصم', align: 'end', value: (r) => r.info?.fee ?? null, cell: (r) => (r.info ? <span className="tabular-nums text-danger">{egp(r.info.fee)}</span> : '—') },
-      { key: 'refund', header: 'المرتد للعميل', align: 'end', value: (r) => r.info?.refund ?? null, cell: (r) => (r.info ? <span className="font-semibold tabular-nums">{egp(r.info.refund)}</span> : '—') },
-      { key: 'reason', header: 'السبب', value: (r) => r.info?.reason || '—' },
-      { key: 'status', header: 'الحالة', sortable: false, searchable: false, csv: false, cell: (r) => <StatusChip status={r.ended ? 'منتهي' : 'مرتجع'} size="sm" /> },
+      {
+        key: 'date',
+        header: 'تاريخ الإرجاع',
+        value: (r) => r.cancelledAt ?? '',
+        cell: (r) => <span className="tabular-nums">{fmtDate(r.cancelledAt ? r.cancelledAt.slice(0, 10) : null)}</span>,
+      },
+      {
+        key: 'paid',
+        header: 'إجمالي المحصّل',
+        align: 'end',
+        value: (r) => r.paid,
+        cell: (r) => <span className="tabular-nums">{egp(r.paid)}</span>,
+      },
+      {
+        key: 'fee',
+        header: 'الخصم',
+        align: 'end',
+        value: (r) => r.info?.fee ?? null,
+        cell: (r) => (r.info ? <span className="tabular-nums text-danger">{egp(r.info.fee)}</span> : '—'),
+      },
+      {
+        key: 'refund',
+        header: 'المرتد للعميل',
+        align: 'end',
+        value: (r) => r.info?.refund ?? null,
+        cell: (r) => (r.info ? <span className="font-semibold tabular-nums">{egp(r.info.refund)}</span> : '—'),
+      },
+      { key: 'reason', header: 'السبب', value: (r) => r.cancelReason ?? r.info?.reason ?? '—' },
+      {
+        key: 'status',
+        header: 'الحالة',
+        sortable: false,
+        searchable: false,
+        csv: false,
+        cell: () => <StatusChip status="ملغي" tone="red" size="sm" />,
+      },
     ],
     [],
   )
 
   return (
     <div className="grid gap-4">
+      {loadError && (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-card border border-warning/40 bg-warning-soft px-4 py-2.5 t-caption text-fg-2">
+          <span>{loadError}</span>
+          <Btn size="sm" variant="glass" onClick={reload}>
+            إعادة المحاولة
+          </Btn>
+        </div>
+      )}
+
       <DataTable
-        rows={rows}
+        rows={tableRows}
         columns={columns}
         rowKey={(r) => r.id}
         caption="المرتجعات"
+        loading={loading}
         title={
           <Btn iconStart={<IconPlus size={16} />} onClick={() => openNew()}>
             تسجيل مرتجع / إنهاء إيجار
@@ -223,29 +367,35 @@ export default function ContractEnd() {
         searchPlaceholder="ابحث برقم العقد أو العميل…"
         exportName="المرتجعات"
         initialSort={{ key: 'date', dir: 'desc' }}
-        emptyText="لا توجد مرتجعات."
+        emptyText={loadError ? 'لا توجد بيانات من الخادم.' : 'لا توجد عقود ملغاة. أي عقد يُلغى من «العقود» يظهر هنا.'}
       />
 
       <Drawer
         open={open}
-        onClose={() => setOpen(false)}
+        onClose={() => !saving && setOpen(false)}
         size="lg"
         tone="danger"
         icon={<IconRefresh size={20} />}
         title={isSale ? 'تسجيل مرتجع' : 'إنهاء عقد إيجار'}
-        description={
-          isSale
-            ? 'يصبح العقد «مرتجع» والوحدة «مرتجعة» وتُلغى الأقساط التي لم يُسدد منها شيء.'
-            : 'يصبح العقد «منتهي» والوحدة «متاحة» وتُلغى الأقساط المستقبلية غير المسددة.'
-        }
+        description="يُسجَّل الإلغاء على الخادم: العقد يصبح «ملغي»، وتُلغى أقساطه غير المسددة، وتصبح الوحدة «متاحة»."
         footer={
           <>
-            <Btn variant="ghost" onClick={() => setOpen(false)}>إلغاء</Btn>
-            <Btn variant="danger" type="submit" form="return-form">{isSale ? 'حفظ المرتجع' : 'إنهاء العقد'}</Btn>
+            <Btn variant="ghost" onClick={() => setOpen(false)} disabled={saving}>
+              إلغاء
+            </Btn>
+            <Btn variant="danger" type="submit" form="return-form" loading={saving}>
+              {isSale ? 'حفظ المرتجع' : 'إنهاء العقد'}
+            </Btn>
           </>
         }
       >
-        <form id="return-form" ref={formRef} noValidate className="grid gap-4" onSubmit={(e) => (e.preventDefault(), save())}>
+        <form
+          id="return-form"
+          ref={formRef}
+          noValidate
+          className="grid gap-4"
+          onSubmit={(e) => (e.preventDefault(), void save())}
+        >
           <div className="grid gap-1.5">
             <span className="t-label">نوع العقد</span>
             <Segmented
@@ -267,52 +417,46 @@ export default function ContractEnd() {
             emptyText="لا توجد عقود نشطة مطابقة"
           />
 
-          {contract && summary && (
+          {contract && (
             <div className="rise-in grid gap-3 rounded-ctl border border-hairline p-4">
               <div className="flex flex-wrap gap-x-6 gap-y-2">
-                <InfoPair label="العميل" value={clientName.get(contract.clientId) ?? '—'} strong />
-                <InfoPair label="الوحدة" value={unitLabel.get(contract.unitId) ?? '—'} />
-                {contract.type === 'بيع' ? (
-                  <InfoPair label="سعر البيع" value={egp(contract.unitPrice)} />
+                <InfoPair label="العميل" value={contract.client_name ?? '—'} strong />
+                <InfoPair label="الوحدة" value={unitLabelOf(contract)} />
+                {contract.type === 'sale' ? (
+                  <InfoPair label="سعر البيع" value={egp(money(contract.total_price))} />
                 ) : (
-                  <InfoPair label="الإيجار الشهري" value={egp(contract.monthlyRent)} />
+                  <InfoPair label="الإيجار الشهري" value={egp(money(contract.monthly_rent))} />
                 )}
               </div>
-              {contract.type === 'بيع' ? (
-                <div className="grid gap-3 sm:grid-cols-3">
-                  <InfoPair label="المدفوع من المقدم" value={egp(summary.downPaymentPaid)} tone="text-success" />
-                  <InfoPair label="المدفوع من الأقساط" value={egp(summary.paidInstallmentsTotal)} tone="text-success" />
-                  <InfoPair label="إجمالي المدفوع" value={egp(summary.totalPaid)} strong tone="text-success" />
-                </div>
-              ) : (
-                <div className="grid gap-3 sm:grid-cols-3">
-                  <InfoPair label="الإيجار المحصّل" value={egp(summary.paidInstallmentsTotal)} tone="text-success" />
-                  <InfoPair label="التأمين المحصّل" value={egp(summary.securityDepositPaid)} strong tone="text-success" />
-                  <InfoPair label="نهاية المدة" value={fmtDate(contract.endDate)} />
-                </div>
-              )}
+              <div className="grid gap-3 sm:grid-cols-3">
+                <InfoPair label="المدفوع من المقدم" value={egp(money(contract.paid_down_payment))} tone="text-success" />
+                <InfoPair
+                  label="المدفوع من الأقساط"
+                  value={egp(Math.max(0, collected(contract) - money(contract.paid_down_payment)))}
+                  tone="text-success"
+                />
+                <InfoPair label="إجمالي المدفوع" value={egp(collected(contract))} strong tone="text-success" />
+              </div>
+              {!isSale && <InfoPair label="التأمين المتفق عليه" value={egp(money(contract.security_deposit))} />}
               <div className="border-t border-hairline pt-3">
                 <div className="t-label mb-2 text-fg-2">
-                  {isSale ? 'الأقساط غير المسددة' : 'أشهر الإيجار غير المسددة'}: {fmtNum(unpaid.length)} — {egp(unpaidTotal)}
+                  الأقساط غير المسددة: {fmtNum(unpaid.length)} — {egp(unpaidTotal)}
                 </div>
                 {unpaid.length > 0 && (
                   <ul className="max-h-40 overflow-auto text-sm">
                     {unpaid.map((i) => (
                       <li key={i.id} className="flex justify-between border-b border-hairline py-1 last:border-0">
                         <span>
-                          {isSale ? 'القسط' : 'الشهر'} {fmtNum(i.seq)} — {fmtDate(i.dueDate)}
+                          القسط {fmtNum(i.sequence_number)} — {fmtDate(i.due_date.slice(0, 10))}
                         </span>
-                        <span className="tabular-nums">
-                          {egp(i.amount - i.paidAmount)}
-                          {i.paidAmount > 0 && <span className="t-caption ms-1">(جزئي)</span>}
-                        </span>
+                        <span className="tabular-nums">{egp(money(i.amount) - money(i.paid_amount))}</span>
                       </li>
                     ))}
                   </ul>
                 )}
-                {unpaid.some((i) => i.paidAmount > 0) && (
+                {unpaid.some((i) => money(i.paid_amount) > 0) && (
                   <p className="t-caption mt-2 flex items-center gap-1 text-warning">
-                    <IconAlert size={13} /> الدفعات المسدد جزء منها تبقى في السجل؛ تُلغى الدفعات التي لم يُسدد منها شيء.
+                    <IconAlert size={13} /> الأقساط المسدد جزء منها تبقى في السجل؛ يُلغى القسط بحالته على الخادم.
                   </p>
                 )}
               </div>
@@ -320,9 +464,32 @@ export default function ContractEnd() {
           )}
 
           <div className="grid gap-4 sm:grid-cols-2">
-            <DatePicker label={isSale ? 'تاريخ الإرجاع' : 'تاريخ الإنهاء'} required value={draft.date} error={errors.date} today={TODAY_ISO} onChange={(v) => update({ date: v })} />
-            <NumericInput label={isSale ? 'خصم/مصاريف إدارية' : 'خصومات أخرى'} suffix="ج.م" min={0} value={draft.fee} error={errors.fee} onChange={(v) => update({ fee: v })} />
-            <Textarea containerClassName="sm:col-span-2" label={isSale ? 'سبب الإرجاع (اختياري)' : 'سبب الإنهاء (اختياري)'} rows={2} value={draft.reason} error={errors.reason} onChange={(e) => update({ reason: e.target.value })} />
+            <DatePicker
+              label={isSale ? 'تاريخ الإرجاع' : 'تاريخ الإنهاء'}
+              value={draft.date}
+              error={errors.date}
+              today={TODAY_ISO}
+              onChange={(v) => update({ date: v })}
+              hint="للعلم في هذا الجهاز — تاريخ الإلغاء الرسمي يسجّله الخادم عند التنفيذ."
+            />
+            <NumericInput
+              label={isSale ? 'خصم/مصاريف إدارية' : 'خصومات أخرى'}
+              suffix="ج.م"
+              min={0}
+              value={draft.fee}
+              error={errors.fee}
+              onChange={(v) => update({ fee: v })}
+            />
+            <Textarea
+              containerClassName="sm:col-span-2"
+              label={isSale ? 'سبب الإرجاع' : 'سبب الإنهاء'}
+              required
+              rows={2}
+              value={draft.reason}
+              error={errors.reason}
+              hint="يُحفظ على العقد ويظهر في سجل العمليات."
+              onChange={(e) => update({ reason: e.target.value })}
+            />
             <NumericInput
               containerClassName="sm:col-span-2"
               label="المبلغ المرتد للعميل"
@@ -332,27 +499,26 @@ export default function ContractEnd() {
               error={errors.refund}
               hint={
                 draft.refundTouched && refund !== autoRefund ? (
-                  <button type="button" className="text-primary hover:underline" onClick={() => update({ refundTouched: false })}>
+                  <button
+                    type="button"
+                    className="text-primary hover:underline"
+                    onClick={() => update({ refundTouched: false })}
+                  >
                     عُدِّل يدويًا — إعادة الحساب التلقائي ({egp(autoRefund)})
                   </button>
                 ) : (
-                  isSale ? `${baseLabel} − الخصم (قابل للتعديل)` : 'التأمين − المستحقات غير المسددة − الخصومات (قابل للتعديل)'
+                  `${baseLabel} − الخصم (قابل للتعديل)`
                 )
               }
               onChange={(v) => update({ refund: v, refundTouched: true })}
             />
           </div>
-          {!isSale && contract && (
-            <div className="rise-in grid gap-2 rounded-ctl border border-hairline p-4 text-sm">
-              <InfoPair label="مستحقات إيجار غير مسددة حتى تاريخ الإنهاء" value={egp(dues)} tone={dues > 0 ? 'text-danger' : undefined} />
-              <InfoPair label="أقساط مستقبلية ستُلغى" value={`${fmtNum(cancelled.length)} — ${egp(cancelled.reduce((s, i) => s + i.amount, 0))}`} />
-              {owed > 0 && (
-                <p className="t-caption flex items-center gap-1 text-danger">
-                  <IconAlert size={13} /> المستحقات والخصومات تتجاوز التأمين بمقدار {egp(owed)} — يبقى على العميل.
-                </p>
-              )}
-            </div>
-          )}
+
+          <p className="t-caption flex items-start gap-1.5 text-fg-3">
+            <IconAlert size={13} className="mt-0.5 shrink-0" />
+            الخصم والمبلغ المرتد يُحفظان في هذا المتصفح فقط (الـAPI لا يحتوي حقولًا لهما بعد)؛ أما إلغاء العقد
+            وتاريخ الإلغاء وسببه والوحدة فكلها على الخادم.
+          </p>
         </form>
       </Drawer>
       {confirmDialog}

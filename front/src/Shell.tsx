@@ -64,6 +64,8 @@ import {
   Save,
   ScrollText,
   Settings,
+  UserCog,
+  History,
   Sun,
   TrendingUp,
   TriangleAlert,
@@ -79,6 +81,7 @@ import {
 import { BrandLogo, BRAND_NAME } from '@/components/BrandLogo'
 import { Badge, Button, GlassCard, MeshBackground, Skeleton, Text } from '@/components/ui'
 import { Btn, IconBtn, Modal, TextInput, useToast } from '@/kit'
+import { saveSettings } from '@/lib/api'
 import { GlobalSearch, type ScreenItem } from '@/screens/GlobalSearch'
 import { applyPerfMode } from '@/kit/perf'
 import { SHORTCUT_LIST, runShortcutAction } from '@/kit/shortcuts'
@@ -227,7 +230,11 @@ const NAV: NavModule[] = [
 const SETTINGS_GROUP: NavGroup = {
   id: 'settings',
   label: 'الإعدادات',
-  screens: [page('settings', 'الإعدادات', Settings, 'حفظ الإعدادات', Save)],
+  screens: [
+    page('settings', 'الإعدادات', Settings, 'حفظ الإعدادات', Save),
+    page('users', 'المستخدمون', UserCog, 'مستخدم جديد', UserPlus),
+    page('logs', 'سجل العمليات', History, 'طباعة السجل', Printer),
+  ],
 }
 const SETTINGS_SCREEN_ID = SETTINGS_GROUP.screens[0].id
 
@@ -235,7 +242,9 @@ const SCREENS = new Map<string, ScreenMeta>([
   ...NAV.flatMap((module) =>
     module.groups.flatMap((group) => group.screens.map((s): [string, ScreenMeta] => [s.id, { ...s, module, group }])),
   ),
-  [SETTINGS_SCREEN_ID, { ...SETTINGS_GROUP.screens[0], module: NAV[0], group: SETTINGS_GROUP }],
+  ...SETTINGS_GROUP.screens.map(
+    (s): [string, ScreenMeta] => [s.id, { ...s, module: NAV[0], group: SETTINGS_GROUP }],
+  ),
 ])
 
 /** There is no dashboard; the app opens on the buildings list. */
@@ -264,6 +273,8 @@ type ScreenModule = { default: ComponentType<ScreenProps> }
 /** Real screens plug in here as they're built, e.g. `contracts: () => import('./screens/Contracts')`. */
 const SCREEN_MODULES: Partial<Record<string, () => Promise<ScreenModule>>> = {
   settings: () => import('./screens/Settings'),
+  users: () => import('./screens/Users'),
+  logs: () => import('./screens/Logs'),
   buildings: () => import('./screens/movement/Buildings'),
   units: () => import('./screens/movement/Units'),
   clients: () => import('./screens/movement/Clients'),
@@ -615,11 +626,18 @@ function ProjectSetup() {
     setSkipped(true)
   }
 
-  const save = () => {
+  const save = async () => {
     const name = projectName.trim()
     if (!name) return setError('اسم المشروع مطلوب')
-    dispatch({ type: 'UPDATE_SETTINGS', payload: { projectName: name, companyName: companyName.trim() || settings.companyName } })
-    toast.success('تم إعداد المشروع', `«${name}» يظهر الآن في الترويسة والمطبوعات.`)
+    const nextCompany = companyName.trim() || settings.companyName
+    try {
+      // Stored in the API so the name shows on every device, not just this browser.
+      const saved = await saveSettings({ project_name: name, company_name: nextCompany })
+      dispatch({ type: 'HYDRATE_SETTINGS', payload: { projectName: saved.project_name, companyName: saved.company_name } })
+      toast.success('تم إعداد المشروع', `«${name}» يظهر الآن في الترويسة والمطبوعات.`)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'تعذّر حفظ اسم المشروع')
+    }
   }
 
   return (
@@ -648,7 +666,7 @@ function ProjectSetup() {
         className="grid gap-4"
         onSubmit={(event) => {
           event.preventDefault()
-          save()
+          void save()
         }}
       >
         <TextInput

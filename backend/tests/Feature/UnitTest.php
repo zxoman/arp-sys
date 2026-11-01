@@ -236,7 +236,8 @@ class UnitTest extends TestCase
         $this->assertNull($response->json('data.non_sellable_reason'));
     }
 
-    public function test_cannot_edit_area_when_unit_sold(): void
+    /** Owner decision 2026-11-01: every unit field stays editable after the unit is sold. */
+    public function test_can_edit_area_and_price_per_meter_when_unit_sold(): void
     {
         $admin = $this->createAdmin();
 
@@ -265,9 +266,17 @@ class UnitTest extends TestCase
         $response = $this->withHeaders($this->authHeaders($admin['token']))
             ->putJson('/api/v1/admin/units/'.$unit->id, [
                 'area' => 200.00,
+                'price_per_meter' => 6000.00,
             ]);
 
-        $response->assertStatus(422);
+        $response->assertStatus(200);
+        $this->assertDatabaseHas('units', [
+            'id' => $unit->id,
+            'area' => 200.00,
+            'price_per_meter' => 6000.00,
+            // Editing the unit never touches the automatic status.
+            'status' => 'sold',
+        ]);
     }
 
     public function test_building_id_immutable_after_creation(): void
@@ -528,7 +537,8 @@ class UnitTest extends TestCase
             ->assertJsonPath('data.non_sellable_reason', null);
     }
 
-    public function test_cannot_change_purpose_or_sale_price_after_unit_is_sold(): void
+    /** The same rule covers purpose, sellability and the sale price on a sold/rented unit. */
+    public function test_can_change_purpose_and_sale_price_after_unit_is_sold(): void
     {
         $admin = $this->createAdmin();
         [$building, $floor] = $this->createContext();
@@ -547,18 +557,16 @@ class UnitTest extends TestCase
 
         $this->withHeaders($this->authHeaders($admin['token']))
             ->putJson('/api/v1/admin/units/'.$unit->id, ['purpose' => 'rent'])
-            ->assertStatus(422)
-            ->assertJsonValidationErrors('purpose');
-
-        $this->withHeaders($this->authHeaders($admin['token']))
-            ->putJson('/api/v1/admin/units/'.$unit->id, ['sale_price' => 700000.00])
-            ->assertStatus(422)
-            ->assertJsonValidationErrors('sale_price');
-
-        // Sending the same values (or no changes) is still allowed.
-        $this->withHeaders($this->authHeaders($admin['token']))
-            ->putJson('/api/v1/admin/units/'.$unit->id, ['purpose' => 'both', 'sale_price' => null])
             ->assertStatus(200);
+
+        // Rent-only clears the sale price.
+        $this->assertDatabaseHas('units', ['id' => $unit->id, 'purpose' => 'rent', 'sale_price' => null]);
+
+        $this->withHeaders($this->authHeaders($admin['token']))
+            ->putJson('/api/v1/admin/units/'.$unit->id, ['purpose' => 'sale', 'sale_price' => 700000.00])
+            ->assertStatus(200);
+
+        $this->assertDatabaseHas('units', ['id' => $unit->id, 'purpose' => 'sale', 'sale_price' => 700000.00]);
     }
 
     public function test_units_index_filters_by_purpose_and_availability(): void

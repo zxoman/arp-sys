@@ -34,6 +34,19 @@ The prototype stores its demo data in localStorage, but the **buildings, units, 
 - The unit drawer posts the API's four types only (`apartment | shop | warehouse | studio`; the prototype's روف / مكتب / ميزانين / بدروم have no model yet). The API requires `activity` when a building has more than one, so the form shows the picker only then (and fills it automatically otherwise). `building_id` is immutable after creation.
 - Sale price = `area × price_per_meter` unless the user edits it (then `sale_price` overrides it and the hint offers «إعادة الحساب»); rent-only units send `price_per_meter`/`sale_price` as `null` and show «—» in the price column — the rent amount is entered at contract time. There is no monthly rent or description field on units.
 - «غير قابلة للبيع» is a manual flag with a required reason, shown as a red chip plus a caption under the unit name; purpose, sale fields and the flag are locked once the API reports `sold` or `rented` (those statuses come only from reservations and contracts).
+- **Users** (`src/screens/Users.tsx`) and **audit log** (`src/screens/Logs.tsx`) sit under the sidebar's
+  «الإعدادات» group next to the settings screen. Users: paged `GET /admin/users` (`search`, `status`), create /
+  edit (with `lock_version`), suspend / activate, password reset and delete; the signed-in account cannot
+  suspend or delete itself. There is **no permissions editor** yet — only the role picker. Logs: read-only
+  `GET /admin/audit-logs` with search, action/entity/date filters and a detail drawer (old/new values, changed
+  fields, meta).
+- **Returns** (`src/screens/movement/ContractEnd.tsx`) reads `GET /admin/contracts?status=cancelled` — so a
+  contract cancelled anywhere in the app appears there — and cancels through
+  `POST /admin/contracts/{id}/cancel` (reason required, unit freed, installments cancelled). Fee/refund have no
+  API columns and stay a per-browser note (`RETURNS_KEY`); the screen says so.
+- **Settings** (`src/screens/Settings.tsx`) saves to `PUT /admin/settings` (project + company data and both
+  logos live in the database). `DataProvider` re-reads them on every sign-in, so all devices show the same
+  project name.
 - **Clients** (`src/screens/movement/Clients.tsx`) use the same gate/table pattern against `GET /admin/clients` (`search`, `sort` = `id | name | phone | phone_2 | national_id | created_at`, `page`, `per_page`) plus `POST/PUT/DELETE /admin/clients`. The drawer mirrors the API model only: name (required), phone, phone_2, national_id, notes — the prototype's client type (مشتري / مستأجر / مالك), address and email have no API fields, and the drawer says so. Delete is a **permanent cascade** (reservations, contracts, receipts, payments; free units return to «متاحة»): the modal says so and the toast quotes `data.deleted` (`clientDeletionSummary`).
 - Phone validation on the client form accepts `01xxxxxxxxx`, `+201xxxxxxxxx` and Arabic-Indic digits (the API normalizes both numbers to `+20…`). A duplicate number never blocks the save: `meta.duplicate_phone` / `meta.duplicate_client_id` becomes a warning toast naming the other client's code. Delete asks for confirmation and surfaces the API's 422 guard (active reservation or any contract, even cancelled).
 - A 401/419 anywhere drops the token (`clearToken()`), which the auth provider turns into a signed-out app: the login screen comes back with «انتهت الجلسة، سجّل الدخول من جديد.»; other failures show a retry banner. 422 responses are mapped back onto the form fields.
@@ -80,14 +93,14 @@ The prototype stores its demo data in localStorage, but the **buildings, units, 
 - The only report tab still on demo data is «عقود الإيجار» (in this screen); the units report's «حالة الوحدات» tab is wired too — see below.
 - Requests send `Accept-Language: ar`, so API messages and validation errors come back in Arabic.
 - Login is **single-session** server-side: every successful login revokes the user's previous tokens, so logging in elsewhere signs this browser out.
-- Demo seed data is still used by contract-end, renewals, the «عقود الإيجار» report tab and the six per-status unit tabs (plus the other not-yet-linked screens).
+- There is **no demo data**: `src/data.ts` and its generated dataset were deleted (owner request, 2026-11-01). The local store (`src/lib.ts`) starts from `emptyData()`, so every not-yet-linked screen (contract-end, renewals, «عقود الإيجار», the six per-status unit tabs, maintenance, owner unions, the income/maintenance/owners reports, records) renders its «لا توجد بيانات» state. `TODAY`/`TODAY_ISO` now come from `src/lib/domain.ts` and are the real date. `STORAGE_PREFIX` is `aqar.sales.v4` so old localStorage demo data is dropped on load.
 - The API allows CORS from any origin in development via `backend/config/cors.php`.
 
 ## Loading speed
 
 Data loading is server-side on the eight collection pages, the wired reports and the header bell, so it is worth keeping the request count and the PHP cost down:
 
-- **Same-origin API in dev.** `vite.config.ts` proxies `/api` to `http://127.0.0.1:8000` (`VITE_API_PROXY` overrides the target), so the front-end calls `/api/v1/...` and the browser sends no CORS preflight. The dev/preview servers allow `.trycloudflare.com` hosts (`VITE_ALLOWED_HOSTS`, comma-separated) so the temporary GitHub Actions demo can be reached through its tunnel; localhost and IPs stay allowed. A build still talks to `http://localhost:8000/api/v1` unless `VITE_API_URL` is set. The backend must run through `backend/scripts/serve.sh` (opcache + workers) — see `backend/AGENTS.md`.
+- **Same-origin API in dev.** `vite.config.ts` proxies `/api` to `http://127.0.0.1:8000` (`VITE_API_PROXY` overrides the target), so the front-end calls `/api/v1/...` and the browser sends no CORS preflight. The dev server allows `.trycloudflare.com` hosts (`VITE_ALLOWED_HOSTS`, comma-separated) when it is put behind a Cloudflare tunnel; localhost and IPs stay allowed. A build still talks to `http://localhost:8000/api/v1` unless `VITE_API_URL` is set. The backend must run through `backend/scripts/serve.sh` (opcache + workers) — see `backend/AGENTS.md`.
 - **One request per GET.** `request()` in `src/lib/api.ts` shares an in-flight promise for identical GETs. React StrictMode mounts effects twice in dev, so without this every list was fetched twice.
 - **Pickers load on demand.** The units page fetches the building list it needs for its filter; the reservations page only loads clients/units/buildings when a drawer opens, not when the page mounts.
 - **Paged lists in parallel.** `fetchAllBuildings` / `fetchAllClients` / `fetchReservableUnits` read page 1 to learn `last_page`, then fetch the remaining pages together instead of one round trip each.

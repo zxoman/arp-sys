@@ -33,7 +33,7 @@ import {
 } from '@/kit'
 import { exportXlsx } from '@/kit/xlsx'
 import { PrintFields, PrintLayout, PrintSection, PrintTable, printDocument } from '@/kit/print'
-import { TODAY_ISO } from '@/data'
+import { TODAY_ISO } from '@/lib/domain'
 import { CLIENT_TONE, codeOf, floorLabel, fmtNum } from './movement/shared'
 import { CODE_LABEL, SERIAL_LABEL, codeFields, serialOf } from '@/lib/codes'
 

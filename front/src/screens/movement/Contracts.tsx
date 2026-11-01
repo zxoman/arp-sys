@@ -12,7 +12,7 @@ import {
   type ScheduleItem,
 } from '@/lib'
 import { addMonths, leaseEndDate, rentForYear, roundTo } from '@/lib/domain'
-import { TODAY_ISO } from '@/data'
+import { TODAY_ISO } from '@/lib/domain'
 import {
   API_CONTRACT_FIELD_TO_FORM,
   ApiError,

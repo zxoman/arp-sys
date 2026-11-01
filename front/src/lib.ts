@@ -10,14 +10,14 @@ import {
   type Dispatch,
   type ReactNode,
 } from 'react'
-import { createSeedData, TODAY_ISO } from './data'
 import {
+  formatId,
   installmentStatus,
   lastIdNumber,
-  formatId,
   nextReceiptNumber,
   pad,
   parseISO,
+  TODAY_ISO,
   type ISODate,
 } from './lib/domain'
 import { applyTheme, getTheme } from './lib/theme'
@@ -266,6 +266,8 @@ export interface OwnerUnion {
 export interface Settings {
   /** Shown read-only in the sidebar, header, forms and every printout; empty until set. */
   projectName: string
+  /** The project's address, stored separately from the company address (API: `project_address`). */
+  projectAddress?: string
   companyName: string
   companyAddress: string
   companyPhone: string
@@ -290,6 +292,68 @@ export interface DataState {
   reservations: Reservation[]
   ownerUnions: OwnerUnion[]
   settings: Settings
+}
+
+/** API settings → the app's `Settings` shape (camelCase, empty string for unset). */
+export function settingsToLocal(s: {
+  project_name: string
+  project_address: string
+  company_name: string
+  company_address: string
+  company_phone: string
+  company_logo: string
+  our_logo: string
+  show_company_logo: boolean
+  show_our_logo: boolean
+  developer_url: string
+}): Settings {
+  return {
+    projectName: s.project_name ?? '',
+    projectAddress: s.project_address ?? '',
+    companyName: s.company_name ?? '',
+    companyAddress: s.company_address ?? '',
+    companyPhone: s.company_phone ?? '',
+    companyLogo: s.company_logo ?? '',
+    ourLogo: s.our_logo ?? '',
+    showCompanyLogo: s.show_company_logo !== false,
+    showOurLogo: s.show_our_logo !== false,
+    developerUrl: s.developer_url ?? '',
+  }
+}
+
+/**
+ * Defaults for the local store. Nothing here is demo content: the fields start empty and the first
+ * launch asks for the project name (see the «إعداد المشروع» modal in `Shell.tsx`).
+ */
+export const DEFAULT_SETTINGS: Settings = {
+  projectName: '',
+  projectAddress: '',
+  companyName: '',
+  companyAddress: '',
+  companyPhone: '',
+  companyLogo: '',
+  ourLogo: '',
+  showCompanyLogo: true,
+  showOurLogo: true,
+}
+
+/**
+ * The empty local store. Screens that are not wired to the API yet read it and show their
+ * «لا توجد بيانات» state — there is no seeded data anywhere in the app.
+ */
+export function emptyData(): DataState {
+  return {
+    buildings: [],
+    units: [],
+    clients: [],
+    contracts: [],
+    installments: [],
+    payments: [],
+    maintenance: [],
+    reservations: [],
+    ownerUnions: [],
+    settings: { ...DEFAULT_SETTINGS },
+  }
 }
 
 /** DataState keys that hold id-keyed arrays. */
@@ -480,6 +544,7 @@ export type DataAction =
   | { type: 'CANCEL_PAYMENTS'; payload: { contractId: string; installmentId: string | null } }
   | { type: 'UPDATE_INSTALLMENT_AMOUNT'; payload: { id: string; amount: number } }
   | { type: 'UPDATE_SETTINGS'; payload: Partial<Settings> }
+  | { type: 'HYDRATE_SETTINGS'; payload: Partial<Settings> }
   /** Restores the seed data. */
   | { type: 'RESET_DATA' }
 
@@ -722,6 +787,11 @@ export function dataReducer(state: DataState, action: DataAction): DataState {
     case 'UPDATE_SETTINGS':
       return { ...state, settings: { ...state.settings, ...action.payload } }
 
+    // The project/company data now lives in the API (one row per field in `settings`), so the
+    // server value replaces the local copy instead of being merged into it.
+    case 'HYDRATE_SETTINGS':
+      return { ...state, settings: { ...DEFAULT_SETTINGS, ...action.payload } }
+
     case 'ADD_OWNER_UNION':
       return { ...state, ownerUnions: [...state.ownerUnions, action.payload] }
 
@@ -732,7 +802,7 @@ export function dataReducer(state: DataState, action: DataAction): DataState {
       return { ...state, ownerUnions: state.ownerUnions.filter((u) => u.id !== action.payload.id) }
 
     case 'RESET_DATA':
-      return createSeedData()
+      return emptyData()
 
     default:
       return state
@@ -747,13 +817,19 @@ export function dataReducer(state: DataState, action: DataAction): DataState {
  * Prefix of every persisted key. Bump the version when the shape of the stored data changes: data
  * under older prefixes is cleared on load and the seed takes its place.
  */
-export const STORAGE_PREFIX = 'aqar.sales.v3'
+export const STORAGE_PREFIX = 'aqar.sales.v4'
 export const storageKey = (name: string) => `${STORAGE_PREFIX}.${name}`
 
 const STORAGE_KEY = storageKey('data')
-const STORAGE_VERSION = 3
-/** Keys of earlier, incompatible builds; cleared on load. */
-const LEGACY_KEYS = ['aqar.data', 'aqar.sales.data', 'aqar.sales.ownerUnions', 'aqar.sales.returns']
+const STORAGE_VERSION = 4
+/** Keys of earlier, incompatible builds; cleared on load (v3 held the removed demo dataset). */
+const LEGACY_KEYS = [
+  'aqar.data',
+  'aqar.sales.data',
+  'aqar.sales.ownerUnions',
+  'aqar.sales.returns',
+  'aqar.sales.v3.data',
+]
 const COLLECTIONS: Collection[] = [
   'buildings',
   'units',
@@ -785,7 +861,7 @@ function hydrate(): DataState {
   } catch {
     // Corrupt or inaccessible storage: fall back to the seed.
   }
-  return createSeedData()
+  return emptyData()
 }
 
 function persist(state: DataState) {
@@ -812,6 +888,30 @@ export function DataProvider({ children }: { children?: ReactNode }) {
   const [state, dispatch] = useReducer(dataReducer, null, hydrate)
 
   useEffect(() => persist(state), [state])
+
+  // Project/company data is shared: it comes from the API, not from this browser. Re-read it when
+  // the session changes, so a second device sees what the first one saved.
+  useEffect(() => {
+    let alive = true
+    const load = () => {
+      void import('./lib/api').then(({ fetchSettings, getToken }) => {
+        if (!getToken()) return
+        fetchSettings()
+          .then((settings) => {
+            if (alive) dispatch({ type: 'HYDRATE_SETTINGS', payload: settingsToLocal(settings) })
+          })
+          .catch(() => {
+            // Offline or no permission: keep whatever is on screen.
+          })
+      })
+    }
+    load()
+    window.addEventListener('aqar:token-changed', load)
+    return () => {
+      alive = false
+      window.removeEventListener('aqar:token-changed', load)
+    }
+  }, [])
 
   const value = useMemo<DataContextValue>(
     () => ({ ...state, dispatch, contractSummary: (id: string) => contractSummary(state, id) }),

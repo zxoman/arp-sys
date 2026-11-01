@@ -36,7 +36,7 @@ import {
   unitTypeLabel,
 } from '@/lib/api'
 import { addDays } from '@/lib/domain'
-import { TODAY_ISO } from '@/data'
+import { TODAY_ISO } from '@/lib/domain'
 import {
   Btn,
   Combobox,

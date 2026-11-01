@@ -10,6 +10,12 @@ Rule: if a real business rule is missing from the BRIEF, ask — do not add it h
 
 ## Units (BRIEF 2.3)
 
+> **Owner decision 2026-11-02:** every unit field is editable at any time, `area` and `price_per_meter`
+> included, and also after the unit is sold or rented. The old guards (`cannot_edit_sold_unit`,
+> `cannot_edit_locked_unit`) are gone; only `building_id` (immutable) and `status` (automatic) are not
+> written by the API. A signed contract keeps its own copy of the amount it was signed for.
+
+
 | Default | Implemented value | Where to change |
 |---|---|---|
 | `purpose` default for new units | `both` (بيع وإيجار) = no restriction | `StoreUnitRequest` / `UnitService::resolvePurpose`, column default in the migration |
@@ -261,3 +267,19 @@ Rule: if a real business rule is missing from the BRIEF, ask — do not add it h
 - Late fees, interest, annual rent increase, renewals — none implemented.
 - Who may override a price away from the reservation price (permission exists: `override price`).
 - Backup retention/off-site copies/alert channel (Phase 7, deferred until a server exists).
+
+## Administration
+
+- **No permissions screen yet** (owner decision 2026-11-02): the users screen creates accounts and assigns an
+  existing role; editing a role's permission list is not exposed in the UI.
+- **Project settings are stored in the database**, not in the browser (`settings` table, one row per field).
+  `project_name`, `project_address`, `company_name`, `company_address`, `company_phone`, `company_logo`,
+  `our_logo`, `show_company_logo`, `show_our_logo`, `developer_url`. Logos are data URLs, hence the
+  `LONGTEXT` column (migration `2026_11_01_000001`).
+- **Returns (المرتجعات):** cancelling a sale or a lease is one operation — `POST /admin/contracts/{id}/cancel`
+  (status `cancelled`, installments cancelled, unit back to `available`). The screen lists
+  `GET /admin/contracts?status=cancelled`, so any cancellation shows up there. The administrative fee and the
+  refunded amount have no API columns yet and are kept as a browser-side note per contract.
+- **Backups:** `php artisan backup:run` writes `storage/app/backups/arp-sys-*.tar.gz` (database dump + the
+  sensitive env keys + a manifest), nightly via scheduler or `scripts/install-backup-timer.sh`
+  (`arp-backup.timer`). Rotation keeps `BACKUP_KEEP` (14) archives. See `docs/BACKUPS.md`.
