@@ -1,6 +1,20 @@
 @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&display=swap');
 @import 'tailwindcss';
 
+/* Cascade order, stated explicitly.
+ *
+ * The kit's own stylesheet (`src/kit/kit.css`) declares `@layer components` on its own, and in a
+ * production build Vite emits it as a SEPARATE <link> that the browser loads BEFORE this file. Layer
+ * order is fixed by the first declaration, so `components` was landing before `theme`/`base` and
+ * Tailwind's preflight (`button { border-radius: 0; border-width: 0; background-color: transparent }`)
+ * was overriding every `.btn`, `.kit-*` and `.t-*` rule — buttons came out square and flat only in
+ * the built app, never in dev (where the styles are injected in a different order).
+ *
+ * Declaring the four layers up front — here and at the top of kit.css — pins the order no matter
+ * which <link> loads first.
+ */
+@layer theme, base, components, utilities;
+
 /* Class-based dark mode: `dark:` utilities follow <html class="dark">. */
 @custom-variant dark (&:where(.dark, .dark *));
 

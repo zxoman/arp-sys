@@ -1,6 +1,11 @@
 /* UI kit styles not covered by src/index.css. Every color, radius and easing comes from its tokens.
    Lives in the components layer, so Tailwind utilities still override it. Reduced motion is
    handled globally by src/index.css (all animations/transitions off). */
+
+/* This file can be emitted as its own stylesheet that loads before src/index.css; the layer order is
+   declared here too so `components` never ends up below `base` (see the note in src/index.css). */
+@layer theme, base, components, utilities;
+
 @layer components {
   /* ---------------------------------------------------------------- LiquidTabs */
   .kit-tabs {
