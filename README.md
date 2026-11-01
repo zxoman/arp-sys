@@ -41,6 +41,9 @@ npm run dev                       # http://localhost:8443 (يوجّه /api إل�
 cd front && VITE_API_URL=/api/v1 npm run build     # ثم انسخ front/dist إلى الخادم
 ```
 
+السيرفر متاح بالاسم المحلي **http://aqar.lan/** كذلك (dnsmasq على السيرفر يوزّعه على الشبكة) —
+تفاصيله وطريقة تفعيله على كل الأجهزة في `backend/docs/DEPLOY.md` قسم «A local domain».
+
 ## الاختبارات والجودة
 
 ```bash

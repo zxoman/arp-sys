@@ -146,9 +146,47 @@ cd backend && composer install --no-dev --prefer-dist --optimize-autoloader \
 No queue worker and no scheduler are needed: the app dispatches no queued jobs and registers no
 scheduled commands.
 
+## A local domain (`aqar.lan`)
+
+The server answers on **http://aqar.lan/** as well as on its IP. On this install:
+
+| Piece | Value |
+|---|---|
+| DNS | `dnsmasq` on the server, bound to `192.168.1.50:53` only (systemd-resolved keeps `127.0.0.53`). Config: `/etc/dnsmasq.d/arp-sys.conf`. Serves `aqar.lan`, `*.aqar.lan` and the short name `aqar` → `192.168.1.50`; everything else is forwarded to the router (`192.168.1.1`), with `1.1.1.1` as a fallback. |
+| nginx | `server_name aqar.lan *.aqar.lan 192.168.1.50 _;` — both names serve the same site. |
+| Laravel | `APP_URL=http://aqar.lan` (front is built with `VITE_API_URL=/api/v1`, so it is same-origin and needed no rebuild). `SANCTUM_STATEFUL_DOMAINS` stays `localhost`: the SPA is Bearer-token only, and stateful mode would demand CSRF and answer 419 on login. |
+
+**Make the whole LAN use it (one-time router change):** in the router's DHCP settings set the DNS
+server to `192.168.1.50`, then reconnect devices (or wait for the lease). Any device that gets its DNS
+from the router now resolves `aqar.lan` with no per-device setup.
+
+Check it:
+
+```bash
+dig +short @192.168.1.50 aqar.lan          # → 192.168.1.50
+curl -s -o /dev/null -w '%{http_code}\n' http://aqar.lan/
+```
+
+**Without touching the router** (one machine at a time), add to its hosts file:
+
+```
+192.168.1.50   aqar.lan
+```
+
+- Linux/macOS: `sudo nano /etc/hosts`
+- Windows: `C:\Windows\System32\drivers\etc\hosts` (run Notepad as administrator)
+
+Diagnostics: `sudo journalctl -u dnsmasq -n 30`, `sudo dnsmasq --test`, `sudo ss -lunp | grep :53`
+(only `192.168.1.50` should be dnsmasq's).
+
+> The name is HTTP-only on purpose (a trusted office LAN): no certificate warnings, nothing to install
+> on phones. If HTTPS is needed later, issue a certificate for `aqar.lan` from a local CA (mkcert) and
+> install that CA on each device, then set `APP_URL=https://aqar.lan` and rebuild the front.
+
 ## Notes
 
 - Login is single-session per user: any new `POST /auth/login` revokes the previous token.
-- The site is HTTP only. Behind a real domain, add HTTPS (`certbot --nginx`) and set `APP_URL` to the
-  `https://` address, otherwise the built URLs and Sanctum's host check keep the old one.
+- The site is HTTP only. Behind a real (public) domain, add HTTPS (`certbot --nginx`) and set `APP_URL`
+  to the `https://` address, otherwise the built URLs and Sanctum's host check keep the old one.
+- The LAN name `aqar.lan` is served by the server's own dnsmasq — see «A local domain» above.
 - `front/dist` is served by nginx directly; the SPA is hash-routed, so deep links also work.

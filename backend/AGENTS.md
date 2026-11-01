@@ -64,8 +64,10 @@ must stay easy to change and be listed in `docs/DEFAULTS.md`.
 - `docs/DEPLOY.md` is the whole procedure: Ubuntu 26.04 packages (PHP 8.5 is the only version there),
   MariaDB, `backend/.env`, nginx (`/api/` → `backend/public/index.php` over `php8.5-fpm`), the front built
   with `VITE_API_URL=/api/v1` and rsynced to `front/dist`, then `php artisan optimize`.
-- Live now: `/var/www/arp-sys` on `192.168.1.50` (nginx + PHP 8.5 FPM + MariaDB 11.8), `APP_ENV=production`,
-  `APP_DEBUG=false`, base seed only. No queue worker and no scheduler are needed.
+- Live now: `/var/www/arp-sys` on `192.168.1.50` — also served as **http://aqar.lan/** (dnsmasq on the
+  server binds `192.168.1.50:53`, config `/etc/dnsmasq.d/arp-sys.conf`; `APP_URL=http://aqar.lan`;
+  nginx `server_name aqar.lan *.aqar.lan 192.168.1.50 _`). nginx + PHP 8.5 FPM + MariaDB 11.8,
+  `APP_ENV=production`, `APP_DEBUG=false`, base seed only. No queue worker and no scheduler are needed.
 - `SANCTUM_STATEFUL_DOMAINS` must not list the site's host: the SPA is Bearer-token only, and stateful mode
   would demand CSRF and answer `419 CSRF token mismatch` on login.
 
