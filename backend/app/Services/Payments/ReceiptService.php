@@ -2,11 +2,9 @@
 
 namespace App\Services\Payments;
 
-use App\Enums\PaymentMethod;
 use App\Enums\PaymentStatus;
 use App\Models\Contract;
 use App\Models\ContractDownPayment;
-use App\Models\Installment;
 use App\Models\InstallmentPayment;
 use App\Models\Receipt;
 use App\Services\Contracts\InstallmentService;
@@ -15,12 +13,16 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
 /**
- * Receipts (إيصالات القبض): one numbered collection act covering several installment payments
- * and, optionally, part of the contract's down payment.
+ * Receipts (إيصالات القبض).
  *
- * The rules are the payment rules, not new ones: no line may exceed what is still owed on its
- * installment (or on the down payment), amounts are never edited, and nothing is deleted — a
- * cancelled receipt leaves its payments in place, marked cancelled.
+ * OWNER RULE (2026-11-03): **one receipt per installment**. When the collection screen pays three
+ * installments in a single act, three numbered receipts are issued — one per installment — and a
+ * down-payment amount entered in the same act gets its own receipt as well. Nothing is ever merged
+ * into a multi-line receipt.
+ *
+ * The payment rules are unchanged: no line may exceed what is still owed on its installment (or on
+ * the down payment), amounts are never edited, and nothing is deleted — a cancelled receipt leaves
+ * its payments in place, marked cancelled.
  */
 class ReceiptService
 {
@@ -31,14 +33,17 @@ class ReceiptService
     ) {}
 
     /**
+     * Records one receipt per installment and, when present, one more for the down payment.
+     *
      * @param  array{contract_id:int, paid_at:string, payment_method?:?string, reference?:?string, notes?:?string, installments?:array<int,array{installment_id:int, amount:numeric}>, down_payment?:numeric|null}  $data
+     * @return list<Receipt> in the order they were numbered
      */
-    public function create(array $data, $actor): Receipt
+    public function create(array $data, $actor): array
     {
         return DB::transaction(function () use ($data, $actor) {
             $contract = Contract::whereKey($data['contract_id'])->lockForUpdate()->firstOrFail();
 
-            if (!$contract->isActive()) {
+            if (! $contract->isActive()) {
                 throw ValidationException::withMessages([
                     'contract_id' => __('receipts.contract_not_active'),
                 ]);
@@ -47,65 +52,87 @@ class ReceiptService
             $lines = $data['installments'] ?? [];
             $downPayment = (float) ($data['down_payment'] ?? 0);
 
-            if (!$lines && $downPayment <= 0) {
+            if (! $lines && $downPayment <= 0) {
                 throw ValidationException::withMessages([
                     'installments' => __('receipts.empty'),
                 ]);
             }
 
-            $receipt = Receipt::create([
-                'number' => $this->generateNumber($data['paid_at']),
-                'contract_id' => $contract->id,
-                'paid_at' => $data['paid_at'],
-                'payment_method' => $data['payment_method'] ?? null,
-                'reference' => $data['reference'] ?? null,
-                'notes' => $data['notes'] ?? null,
-                'total_amount' => 0,
-                'status' => PaymentStatus::VALID->value,
-                'created_by' => $actor->id,
-            ]);
+            $receipts = [];
 
-            $total = 0.0;
-
+            // One receipt per installment — never a receipt covering several.
             foreach ($lines as $line) {
-                $payment = $this->installments->recordPayment(
-                    $contract->id,
-                    (int) $line['installment_id'],
-                    [
-                        'amount' => $line['amount'],
-                        'paid_at' => $data['paid_at'],
-                        'payment_method' => $data['payment_method'] ?? null,
-                        'notes' => $data['notes'] ?? null,
-                    ],
-                    $actor,
-                    $receipt->id
-                );
-                $total += (float) $payment->amount;
+                $receipts[] = $this->createOne($contract, [$line], 0.0, $data, $actor);
             }
 
+            // The down payment is its own collection act, so it gets its own receipt too.
             if ($downPayment > 0) {
-                $total += $this->recordDownPayment($contract, $downPayment, $data, $receipt, $actor);
+                $receipts[] = $this->createOne($contract, [], $downPayment, $data, $actor);
             }
 
-            $receipt->update(['total_amount' => round($total, 2)]);
-
-            $this->audit->log(
-                action: 'create',
-                entityType: 'receipts',
-                entityId: $receipt->id,
-                newValues: [
-                    'number' => $receipt->number,
-                    'contract_id' => $contract->id,
-                    'total_amount' => round($total, 2),
-                    'installments' => array_map(fn ($l) => (int) $l['installment_id'], $lines),
-                    'down_payment' => $downPayment > 0 ? $downPayment : null,
-                ],
-                isAutomatic: true,
-                reason: 'Receipt #' . $receipt->number . ' recorded for contract #' . $contract->number,
-            );
-
-            return $receipt->fresh()->load('contract.client', 'contract.unit.building', 'installmentPayments.installment', 'downPayments');
+            return $receipts;
         });
+    }
+
+    /**
+     * One numbered receipt with at most one installment line and/or the down-payment amount.
+     *
+     * @param  array<int, array{installment_id:int, amount:numeric}>  $lines
+     */
+    private function createOne(Contract $contract, array $lines, float $downPayment, array $data, $actor): Receipt
+    {
+        $receipt = Receipt::create([
+            'number' => $this->generateNumber($data['paid_at']),
+            'contract_id' => $contract->id,
+            'paid_at' => $data['paid_at'],
+            'payment_method' => $data['payment_method'] ?? null,
+            'reference' => $data['reference'] ?? null,
+            'notes' => $data['notes'] ?? null,
+            'total_amount' => 0,
+            'status' => PaymentStatus::VALID->value,
+            'created_by' => $actor->id,
+        ]);
+
+        $total = 0.0;
+
+        foreach ($lines as $line) {
+            $payment = $this->installments->recordPayment(
+                $contract->id,
+                (int) $line['installment_id'],
+                [
+                    'amount' => $line['amount'],
+                    'paid_at' => $data['paid_at'],
+                    'payment_method' => $data['payment_method'] ?? null,
+                    'notes' => $data['notes'] ?? null,
+                ],
+                $actor,
+                $receipt->id
+            );
+            $total += (float) $payment->amount;
+        }
+
+        if ($downPayment > 0) {
+            $total += $this->recordDownPayment($contract, $downPayment, $data, $receipt, $actor);
+        }
+
+        $receipt->update(['total_amount' => round($total, 2)]);
+
+        $this->audit->log(
+            action: 'create',
+            entityType: 'receipts',
+            entityId: $receipt->id,
+            newValues: [
+                'number' => $receipt->number,
+                'contract_id' => $contract->id,
+                'total_amount' => round($total, 2),
+                'installments' => array_map(fn ($l) => (int) $l['installment_id'], $lines),
+                'down_payment' => $downPayment > 0 ? $downPayment : null,
+            ],
+            isAutomatic: true,
+            reason: 'Receipt #'.$receipt->number.' recorded for contract #'.$contract->number,
+        );
+
+        return $receipt->fresh()->load('contract.client', 'contract.unit.building', 'installmentPayments.installment', 'downPayments');
     }
 
     /**
@@ -114,7 +141,7 @@ class ReceiptService
      */
     public function cancel(Receipt $receipt, string $reason, $actor): Receipt
     {
-        if (!$receipt->isValid()) {
+        if (! $receipt->isValid()) {
             throw ValidationException::withMessages([
                 'receipt' => __('receipts.already_cancelled'),
             ]);
@@ -149,7 +176,7 @@ class ReceiptService
                     oldValues: ['status' => 'valid', 'amount' => $downPayment->amount],
                     newValues: ['status' => 'cancelled', 'cancel_reason' => $reason],
                     changedFields: ['status', 'cancel_reason', 'cancelled_at'],
-                    reason: 'Down-payment cancelled with receipt #' . $receipt->number . ': ' . $reason,
+                    reason: 'Down-payment cancelled with receipt #'.$receipt->number.': '.$reason,
                 );
             }
 
@@ -167,7 +194,7 @@ class ReceiptService
                 newValues: ['status' => 'cancelled', 'cancel_reason' => $reason],
                 changedFields: ['status', 'cancel_reason', 'cancelled_at'],
                 isAutomatic: false,
-                reason: 'Receipt cancelled: ' . $reason,
+                reason: 'Receipt cancelled: '.$reason,
             );
 
             return $receipt->fresh()->load('contract.client', 'contract.unit.building', 'installmentPayments.installment', 'downPayments');
@@ -212,7 +239,7 @@ class ReceiptService
                 'receipt_id' => $receipt->id,
             ],
             isAutomatic: true,
-            reason: 'Down payment collected with receipt #' . $receipt->number,
+            reason: 'Down payment collected with receipt #'.$receipt->number,
         );
 
         return round($amount, 2);
@@ -222,15 +249,15 @@ class ReceiptService
     private function generateNumber(string $paidAt): string
     {
         $year = \Carbon\Carbon::parse($paidAt)->year;
-        $prefix = 'R-' . $year . '-';
+        $prefix = 'R-'.$year.'-';
 
         $max = Receipt::withTrashed()
-            ->where('number', 'like', $prefix . '%')
+            ->where('number', 'like', $prefix.'%')
             ->lockForUpdate()
             ->max('number');
 
         $next = $max ? (int) substr($max, strlen($prefix)) + 1 : 1;
 
-        return $prefix . str_pad((string) $next, 5, '0', STR_PAD_LEFT);
+        return $prefix.str_pad((string) $next, 5, '0', STR_PAD_LEFT);
     }
 }

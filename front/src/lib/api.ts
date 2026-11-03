@@ -1214,7 +1214,10 @@ export interface ApiReceipt {
   created_at?: string
 }
 
-/** What the receipts page sends: one receipt covering several installments and/or the down payment. */
+/**
+ * What the receipts page sends. The API issues **one receipt per installment** (plus one for the down
+ * payment), so a body listing three installments produces three numbered receipts.
+ */
 export interface ReceiptInput {
   contractId: number
   /** ISO `YYYY-MM-DD`. */
@@ -1296,13 +1299,19 @@ export async function fetchReceipt(apiId: number): Promise<ApiReceipt> {
   return res.data
 }
 
-/** `POST /admin/receipts` — creates one payment per line, all under one receipt number. */
-export async function createReceipt(input: ReceiptInput): Promise<ApiReceipt> {
-  const res = await request<ApiReceipt>('/admin/receipts', {
+/**
+ * `POST /admin/receipts` — one receipt number per installment (and one for the down payment).
+ * `data` is the first receipt; `meta.receipts` holds every receipt the call created, in order.
+ */
+export async function createReceipt(
+  input: ReceiptInput,
+): Promise<{ receipt: ApiReceipt; receipts: ApiReceipt[]; count: number }> {
+  const res = await request<ApiReceipt, { count: number; receipts: ApiReceipt[] }>('/admin/receipts', {
     method: 'POST',
     body: JSON.stringify(receiptBody(input)),
   })
-  return res.data
+  const receipts = res.meta?.receipts?.length ? res.meta.receipts : [res.data]
+  return { receipt: receipts[0], receipts, count: res.meta?.count ?? receipts.length }
 }
 
 /** `POST /admin/receipts/{id}/cancel` — cancels every payment the receipt created. */

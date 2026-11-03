@@ -45,7 +45,7 @@ import { PrintAmount, PrintFields, PrintLayout, PrintSignatures, printDocument }
 import { shortcutLabel, useShortcutAction } from '@/kit/shortcuts'
 import { serialColumn } from '@/kit/codes'
 import { CODE_LABEL, codeLine } from '@/lib/codes'
-import { FilterChips, InfoPair, RECEIPT_PREFILL_KEY, useNewShortcut, useShake, type Errors } from './shared'
+import { FilterChips, fmtNum, InfoPair, RECEIPT_PREFILL_KEY, useNewShortcut, useShake, type Errors } from './shared'
 
 const SEARCH_DELAY_MS = 300
 const req = 'هذا الحقل مطلوب'
@@ -427,7 +427,7 @@ export default function Receipts() {
       .map((r) => ({ installmentId: r.installmentId!, amount: rowPay[r.key]! }))
     const downLine = (rowPay[DOWN] ?? 0) > 0 ? rowPay[DOWN] : null
     try {
-      const created = await createReceipt({
+      const { receipts } = await createReceipt({
         contractId: contract.id,
         paidAt: draft.date!,
         method: PAYMENT_METHOD_TO_API[draft.method] ?? null,
@@ -437,11 +437,14 @@ export default function Receipts() {
         downPayment: downLine,
       })
       setDirty(false)
+      // The API issues one receipt per installment (and one for the down payment).
+      const numbers = receipts.map((r) => r.number).join('، ')
+      const total = receipts.reduce((sum, r) => sum + money(r.total_amount), 0)
       toast.show({
         tone: 'success',
-        title: 'تم حفظ الإيصال',
-        description: `${created.number} — ${egp(money(created.total_amount))}${after > 0 ? ` · متبقي ${egp(after)} (جزئي)` : ' · تم سداد الدفعة بالكامل'}`,
-        action: { label: 'طباعة', onClick: () => printReceipt(created, after) },
+        title: receipts.length > 1 ? `تم حفظ ${fmtNum(receipts.length)} إيصالات` : 'تم حفظ الإيصال',
+        description: `${numbers} — ${egp(total)}${after > 0 ? ` · متبقي ${egp(after)} (جزئي)` : ' · تم سداد الدفعة بالكامل'}`,
+        action: { label: receipts.length > 1 ? 'طباعة الكل' : 'طباعة', onClick: () => void printReceipts(receipts, after) },
       })
       setDraft(emptyDraft())
       setRowPay({})
@@ -476,8 +479,15 @@ export default function Receipts() {
   })
 
   // ── Print ───────────────────────────────────────────────────────────────
+  /** Prints one document per receipt, one after the other (each installment has its own number). */
+  const printReceipts = async (list: ApiReceipt[], remainingAfter: number | null = null) => {
+    for (const r of list) {
+      await printReceipt(r, remainingAfter)
+    }
+  }
+
   const printReceipt = (r: ApiReceipt, remainingAfter: number | null = null) => {
-    void printDocument(
+    return printDocument(
       <ReceiptDoc
         settings={settings}
         number={r.number}

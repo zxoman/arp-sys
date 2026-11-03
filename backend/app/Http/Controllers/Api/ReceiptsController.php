@@ -11,8 +11,9 @@ use App\Services\Payments\ReceiptService;
 use Illuminate\Http\JsonResponse;
 
 /**
- * Receipts (إيصالات القبض): the collection page's list, one numbered receipt covering several
- * installment payments (and optionally the down payment), and cancelling a receipt as a whole.
+ * Receipts (إيصالات القبض): the collection page's list, creating receipts and cancelling one as a
+ * whole. One collection act issues **one receipt per installment** (owner rule 2026-11-03), so a
+ * payment covering three installments returns three numbered receipts.
  */
 class ReceiptsController extends Controller
 {
@@ -96,10 +97,20 @@ class ReceiptsController extends Controller
 
     public function store(StoreReceiptRequest $request): JsonResponse
     {
-        $receipt = $this->receiptService->create($request->validated(), $request->user());
+        $receipts = $this->receiptService->create($request->validated(), $request->user());
 
+        $resources = collect($receipts)
+            ->map(fn (Receipt $receipt) => new ReceiptResource($receipt->load('createdBy')))
+            ->values();
+
+        // `data` is the first receipt (so a single-payment call reads exactly as before); `meta`
+        // carries every receipt the act produced, in numbering order.
         return response()->json([
-            'data' => new ReceiptResource($receipt->load('createdBy')),
+            'data' => $resources->first(),
+            'meta' => [
+                'count' => $resources->count(),
+                'receipts' => $resources,
+            ],
         ], 201);
     }
 

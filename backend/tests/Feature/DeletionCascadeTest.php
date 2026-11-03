@@ -103,13 +103,14 @@ class DeletionCascadeTest extends TestCase
         $first = DB::table('installments')->where('contract_id', $contractId)
             ->orderBy('sequence_number')->value('id');
 
+        // One receipt per installment + one for the down payment (owner rule 2026-11-03) => 2.
         $this->withHeaders($this->headers())->postJson('/api/v1/admin/receipts', [
             'contract_id' => $contractId,
             'paid_at' => '2026-02-05',
             'payment_method' => 'cash',
             'installments' => [['installment_id' => $first, 'amount' => 20000]],
             'down_payment' => 10000,
-        ])->assertStatus(201);
+        ])->assertStatus(201)->assertJsonPath('meta.count', 2);
 
         return $contractId;
     }
@@ -152,7 +153,7 @@ class DeletionCascadeTest extends TestCase
         $response->assertJsonPath('data.deleted.reservations', 1);
         $response->assertJsonPath('data.deleted.deposit_payments', 1);
         $response->assertJsonPath('data.deleted.contracts', 1);
-        $response->assertJsonPath('data.deleted.receipts', 1);
+        $response->assertJsonPath('data.deleted.receipts', 2);
         $response->assertJsonPath('data.deleted.payments', 2);
 
         $this->assertTablesEmpty([
@@ -204,7 +205,7 @@ class DeletionCascadeTest extends TestCase
 
         $response->assertStatus(200);
         $response->assertJsonPath('data.deleted.contracts', 1);
-        $response->assertJsonPath('data.deleted.receipts', 1);
+        $response->assertJsonPath('data.deleted.receipts', 2);
         $response->assertJsonPath('data.deleted.payments', 2);
         $response->assertJsonPath('data.deleted.reservations', 1);
         $response->assertJsonPath('data.deleted.deposit_payments', 1);
@@ -220,7 +221,7 @@ class DeletionCascadeTest extends TestCase
 
         // Exactly the other client's deal is left (contract + receipt + payment lines).
         $this->assertSame(1, DB::table('contracts')->count());
-        $this->assertSame(1, DB::table('receipts')->count());
+        $this->assertSame(2, DB::table('receipts')->count());
         $this->assertSame(2, DB::table('installment_payments')->count() + DB::table('contract_down_payments')->count());
         $this->assertSame(0, DB::table('reservations')->count());
         $this->assertSame(0, DB::table('reservation_payments')->count());
@@ -240,7 +241,7 @@ class DeletionCascadeTest extends TestCase
         $response->assertStatus(200);
         $response->assertJsonPath('data.deleted.units', 1);
         $response->assertJsonPath('data.deleted.contracts', 1);
-        $response->assertJsonPath('data.deleted.receipts', 1);
+        $response->assertJsonPath('data.deleted.receipts', 2);
 
         $this->assertTablesEmpty(['contracts', 'installments', 'contract_down_payments', 'installment_payments', 'receipts']);
         $this->assertSame(0, DB::table('units')->where('id', $unitId)->count());

@@ -7,6 +7,8 @@ use App\Models\BuildingActivity;
 use App\Models\Client;
 use App\Models\Contract;
 use App\Models\Floor;
+use App\Models\InstallmentPayment;
+use App\Models\Receipt;
 use App\Models\Role;
 use App\Models\RolePermission;
 use App\Models\Unit;
@@ -110,7 +112,8 @@ class ReceiptTest extends TestCase
         return Contract::findOrFail($id);
     }
 
-    public function test_one_receipt_covers_several_installments_and_the_down_payment(): void
+    /** Owner rule 2026-11-03: paying several installments issues one receipt per installment. */
+    public function test_each_installment_gets_its_own_receipt(): void
     {
         $contract = $this->contract();
         [$first, $second] = $contract->installments()->orderBy('sequence_number')->limit(2)->get()->all();
@@ -129,29 +132,75 @@ class ReceiptTest extends TestCase
         ]);
 
         $response->assertStatus(201);
-        $response->assertJsonPath('data.total_amount', '34000.00');
-        $response->assertJsonPath('data.payment_method', 'instapay');
-        $response->assertJsonPath('data.installments.0.amount', '10000.00');
-        $response->assertJsonPath('data.installments.1.amount', '4000.00');
-        $response->assertJsonPath('data.down_payment.amount', '20000.00');
-        $response->assertJsonPath('data.status', 'valid');
-        $this->assertMatchesRegularExpression('/^R-2026-\d{5}$/', $response->json('data.number'));
 
+        // Two installments + the down payment = three separate, consecutively numbered receipts.
+        $response->assertJsonPath('meta.count', 3);
+        $this->assertDatabaseCount('receipts', 3);
+
+        $numbers = collect($response->json('meta.receipts'))->pluck('number')->all();
+        $this->assertCount(3, $numbers);
+        $this->assertSame($numbers, array_values(array_unique($numbers)));
+        foreach ($numbers as $number) {
+            $this->assertMatchesRegularExpression('/^R-2026-\d{5}$/', $number);
+        }
+
+        // Each receipt holds exactly one line: the first installment, the second, then the deposit.
+        $receipts = Receipt::orderBy('number')->get();
+        $this->assertSame(['10000.00', '4000.00', '20000.00'], $receipts->pluck('total_amount')->all());
+
+        foreach ($receipts as $receipt) {
+            $this->assertLessThanOrEqual(1, $receipt->installmentPayments()->count());
+            $this->assertLessThanOrEqual(1, $receipt->downPayments()->count());
+        }
+
+        $this->assertSame(
+            [$first->id, $second->id],
+            InstallmentPayment::whereNotNull('receipt_id')->orderBy('id')->pluck('installment_id')->all()
+        );
+
+        // The money still lands where it should, and every line carries its own receipt number.
         $this->assertSame('paid', $first->fresh()->status->value);
         $this->assertSame('10000.00', $first->fresh()->paid_amount);
         $this->assertSame('partially_paid', $second->fresh()->status->value);
         $this->assertSame('6000.00', $second->fresh()->remaining);
 
-        // The down payment is counted as paid from the contract's own sums.
         $contract = $contract->fresh();
         $this->assertSame('20000.00', $contract->paid_down_payment);
         $this->assertSame('10000.00', $contract->remaining_down_payment);
 
         $this->assertDatabaseHas('installment_payments', [
             'installment_id' => $first->id,
-            'receipt_id' => $response->json('data.id'),
+            'receipt_id' => $receipts[0]->id,
             'payment_method' => 'instapay',
         ]);
+        $this->assertDatabaseHas('installment_payments', [
+            'installment_id' => $second->id,
+            'receipt_id' => $receipts[1]->id,
+            'payment_method' => 'instapay',
+        ]);
+        $this->assertDatabaseHas('contract_down_payments', [
+            'receipt_id' => $receipts[2]->id,
+            'amount' => '20000.00',
+        ]);
+    }
+
+    /** A single installment still produces exactly one receipt, returned in `data`. */
+    public function test_a_single_installment_makes_one_receipt(): void
+    {
+        $contract = $this->contract();
+        $installment = $contract->installments()->orderBy('sequence_number')->first();
+
+        $response = $this->withHeaders($this->headers())->postJson('/api/v1/admin/receipts', [
+            'contract_id' => $contract->id,
+            'paid_at' => '2026-02-05',
+            'installments' => [['installment_id' => $installment->id, 'amount' => 10000]],
+        ]);
+
+        $response->assertStatus(201);
+        $response->assertJsonPath('meta.count', 1);
+        $response->assertJsonPath('data.total_amount', '10000.00');
+        $this->assertSame($response->json('data.id'), $response->json('meta.receipts.0.id'));
+        $this->assertDatabaseCount('receipts', 1);
     }
 
     public function test_a_receipt_may_not_pay_more_than_an_installment_owes(): void
@@ -224,12 +273,13 @@ class ReceiptTest extends TestCase
         $this->assertDatabaseCount('receipts', 0);
     }
 
-    public function test_cancelling_a_receipt_reverses_every_line(): void
+    /** With one receipt per installment, cancelling one returns only its own installment. */
+    public function test_cancelling_a_receipt_reverses_only_its_own_line(): void
     {
         $contract = $this->contract();
         [$first, $second] = $contract->installments()->orderBy('sequence_number')->limit(2)->get()->all();
 
-        $receiptId = $this->withHeaders($this->headers())->postJson('/api/v1/admin/receipts', [
+        $created = $this->withHeaders($this->headers())->postJson('/api/v1/admin/receipts', [
             'contract_id' => $contract->id,
             'paid_at' => '2026-02-05',
             'installments' => [
@@ -237,22 +287,32 @@ class ReceiptTest extends TestCase
                 ['installment_id' => $second->id, 'amount' => 5000],
             ],
             'down_payment' => 10000,
-        ])->assertStatus(201)->json('data.id');
+        ])->assertStatus(201)->json('meta.receipts');
 
-        $this->withHeaders($this->headers())->postJson("/api/v1/admin/receipts/{$receiptId}/cancel", [
+        [$firstReceipt, $secondReceipt, $depositReceipt] = $created;
+        $this->assertSame('10000.00', $firstReceipt['total_amount']);
+        $this->assertSame('5000.00', $secondReceipt['total_amount']);
+        $this->assertSame('10000.00', $depositReceipt['total_amount']);
+
+        // Cancel the receipt of the first installment only.
+        $this->withHeaders($this->headers())->postJson("/api/v1/admin/receipts/{$firstReceipt['id']}/cancel", [
             'cancel_reason' => 'شيك مرتجع',
         ])->assertStatus(200)->assertJsonPath('data.status', 'cancelled');
 
         $this->assertSame('due', $first->fresh()->status->value);
         $this->assertSame('0.00', $first->fresh()->paid_amount);
-        $this->assertSame('0.00', $second->fresh()->paid_amount);
-        $this->assertSame('0.00', $contract->fresh()->paid_down_payment);
 
-        $this->assertDatabaseHas('installment_payments', ['receipt_id' => $receiptId, 'status' => 'cancelled']);
-        $this->assertDatabaseHas('contract_down_payments', ['receipt_id' => $receiptId, 'status' => 'cancelled']);
+        // The other two receipts and their money are untouched.
+        $this->assertSame('5000.00', $second->fresh()->paid_amount);
+        $this->assertSame('10000.00', $contract->fresh()->paid_down_payment);
+        $this->assertDatabaseHas('receipts', ['id' => $secondReceipt['id'], 'status' => 'valid']);
+        $this->assertDatabaseHas('receipts', ['id' => $depositReceipt['id'], 'status' => 'valid']);
+
+        $this->assertDatabaseHas('installment_payments', ['receipt_id' => $firstReceipt['id'], 'status' => 'cancelled']);
+        $this->assertDatabaseHas('contract_down_payments', ['receipt_id' => $depositReceipt['id'], 'status' => 'valid']);
 
         // Cancelling twice is refused.
-        $this->withHeaders($this->headers())->postJson("/api/v1/admin/receipts/{$receiptId}/cancel", [
+        $this->withHeaders($this->headers())->postJson("/api/v1/admin/receipts/{$firstReceipt['id']}/cancel", [
             'cancel_reason' => 'مرة أخرى',
         ])->assertStatus(422);
     }

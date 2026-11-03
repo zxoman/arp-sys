@@ -268,6 +268,17 @@ Rule: if a real business rule is missing from the BRIEF, ask — do not add it h
 - Who may override a price away from the reservation price (permission exists: `override price`).
 - Backup retention/off-site copies/alert channel (Phase 7, deferred until a server exists).
 
+## Receipts (BRIEF 2.7)
+
+- **One receipt per installment** (owner decision 2026-11-03). When the collection screen pays three
+  installments in one act, the API issues **three numbered receipts**, one per installment; a down-payment
+  amount entered in the same act gets its own receipt too. Implemented in `ReceiptService::create` (one
+  `createOne()` call per line), so nothing can merge them again. The response keeps `data` = the first
+  receipt and adds `meta.count` + `meta.receipts` with all of them; the screen prints one document per
+  receipt.
+- Cancelling a receipt only reverses its own line (`ReceiptService::cancel`), which is now always a single
+  installment or a single down-payment amount.
+
 ## Administration
 
 - **No permissions screen yet** (owner decision 2026-11-02): the users screen creates accounts and assigns an

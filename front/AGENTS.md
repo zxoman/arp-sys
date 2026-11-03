@@ -47,6 +47,9 @@ The prototype stores its demo data in localStorage, but the **buildings, units, 
 - **Settings** (`src/screens/Settings.tsx`) saves to `PUT /admin/settings` (project + company data and both
   logos live in the database). `DataProvider` re-reads them on every sign-in, so all devices show the same
   project name.
+- **Receipts** (`src/screens/movement/Receipts.tsx`): paying several installments in one act now returns
+  one receipt per installment (`createReceipt` reads `meta.receipts`); the toast lists every number and
+  «طباعة الكل» prints one document per receipt.
 - **Clients** (`src/screens/movement/Clients.tsx`) use the same gate/table pattern against `GET /admin/clients` (`search`, `sort` = `id | name | phone | phone_2 | national_id | created_at`, `page`, `per_page`) plus `POST/PUT/DELETE /admin/clients`. The drawer mirrors the API model only: name (required), phone, phone_2, national_id, notes — the prototype's client type (مشتري / مستأجر / مالك), address and email have no API fields, and the drawer says so. Delete is a **permanent cascade** (reservations, contracts, receipts, payments; free units return to «متاحة»): the modal says so and the toast quotes `data.deleted` (`clientDeletionSummary`).
 - Phone validation on the client form accepts `01xxxxxxxxx`, `+201xxxxxxxxx` and Arabic-Indic digits (the API normalizes both numbers to `+20…`). A duplicate number never blocks the save: `meta.duplicate_phone` / `meta.duplicate_client_id` becomes a warning toast naming the other client's code. Delete asks for confirmation and surfaces the API's 422 guard (active reservation or any contract, even cancelled).
 - A 401/419 anywhere drops the token (`clearToken()`), which the auth provider turns into a signed-out app: the login screen comes back with «انتهت الجلسة، سجّل الدخول من جديد.»; other failures show a retry banner. 422 responses are mapped back onto the form fields.

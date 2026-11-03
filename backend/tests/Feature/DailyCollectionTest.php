@@ -132,7 +132,7 @@ class DailyCollectionTest extends TestCase
         array $lines,
         ?float $downPayment = null,
         ?string $method = null
-    ): Receipt {
+    ): array {
         $payload = [
             'contract_id' => $contract->id,
             'paid_at' => $paidAt,
@@ -145,11 +145,14 @@ class DailyCollectionTest extends TestCase
             $payload['payment_method'] = $method;
         }
 
+        $before = Receipt::query()->max('id') ?? 0;
+
         $this->withHeaders($this->headers())
             ->postJson('/api/v1/admin/receipts', $payload)
             ->assertStatus(201);
 
-        return Receipt::query()->orderByDesc('id')->firstOrFail();
+        // One receipt per installment + one for the down payment (owner rule 2026-11-03).
+        return Receipt::query()->where('id', '>', $before)->orderBy('id')->get()->all();
     }
 
     /** A sale contract with a 20,000 down payment and two 40,000 installments. */
@@ -196,14 +199,14 @@ class DailyCollectionTest extends TestCase
         $contract = $this->saleContract($this->unit, $client);
         $rows = $contract->installments()->orderBy('sequence_number')->get();
 
-        $january = $this->receipt(
+        [$januaryInstallment, $januaryDeposit] = $this->receipt(
             $contract,
             '2026-01-05',
             [['installment_id' => $rows[0]->id, 'amount' => 10000]],
             5000,
             'cash'
         );
-        $february = $this->receipt(
+        [$february] = $this->receipt(
             $contract,
             '2026-02-05',
             [['installment_id' => $rows[1]->id, 'amount' => 40000]],
@@ -234,7 +237,8 @@ class DailyCollectionTest extends TestCase
         $this->assertSame(0.0, (float) $data['summary']['cancelled']);
         $this->assertSame(58000.0, (float) $data['summary']['net']);
         $this->assertSame(4, $data['summary']['lines']);
-        $this->assertSame(2, $data['summary']['receipts']);
+        // January made two (installment + deposit), February one.
+        $this->assertSame(3, $data['summary']['receipts']);
         $this->assertSame(365, $data['summary']['days']);
 
         $byType = $this->keyedBy($data['by_type'], 'type');
@@ -275,11 +279,15 @@ class DailyCollectionTest extends TestCase
         $this->assertSame($this->building->name, $payments[1]['building_name']);
         $this->assertSame('bank_transfer', $payments[1]['method']);
 
-        // The two January lines share one receipt; one is the down payment.
+        // Each January line has its own receipt: the installment one and the down-payment one.
         $this->assertSame('2026-01-05', $payments[2]['paid_at']);
         $this->assertSame('2026-01-05', $payments[3]['paid_at']);
-        $this->assertSame($january->number, $payments[2]['receipt_number']);
-        $this->assertSame($january->number, $payments[3]['receipt_number']);
+        $receiptNumbers = [$payments[2]['receipt_number'], $payments[3]['receipt_number']];
+        sort($receiptNumbers);
+        $expected = [$januaryInstallment->number, $januaryDeposit->number];
+        sort($expected);
+        $this->assertSame($expected, $receiptNumbers);
+        $this->assertNotSame($januaryInstallment->number, $januaryDeposit->number);
         $types = [$payments[2]['payment_type'], $payments[3]['payment_type']];
         sort($types);
         $this->assertSame(['down_payment', 'installment'], $types);
@@ -297,7 +305,7 @@ class DailyCollectionTest extends TestCase
         $contract = $this->saleContract($this->unit);
         $installment = $contract->installments()->orderBy('sequence_number')->firstOrFail();
 
-        $receipt = $this->receipt(
+        [$receipt] = $this->receipt(
             $contract,
             '2026-01-10',
             [['installment_id' => $installment->id, 'amount' => 20000]],

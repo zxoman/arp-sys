@@ -202,7 +202,8 @@ class MonthlyRevenueTest extends TestCase
         $january = $data['months'][0];
         $this->assertSame('2026-01', $january['month']);
         $this->assertSame(2, $january['payments']);
-        $this->assertSame(1, $january['receipts']);
+        // One receipt per line now: the installment and the down payment each get their own.
+        $this->assertSame(2, $january['receipts']);
         $this->assertSame(5000.0, (float) $january['down_payments']);
         $this->assertSame(10000.0, (float) $january['installments']);
         $this->assertSame(0.0, (float) $january['reservations']);
@@ -220,7 +221,7 @@ class MonthlyRevenueTest extends TestCase
         $this->assertSame(58000.0, (float) $february['cumulative']);
 
         $this->assertSame(4, $data['totals']['payments']);
-        $this->assertSame(2, $data['totals']['receipts']);
+        $this->assertSame(3, $data['totals']['receipts']);
         $this->assertSame(5000.0, (float) $data['totals']['down_payments']);
         $this->assertSame(50000.0, (float) $data['totals']['installments']);
         $this->assertSame(3000.0, (float) $data['totals']['reservations']);

@@ -95,6 +95,9 @@ must stay easy to change and be listed in `docs/DEFAULTS.md`.
   The front hydrates them on sign-in, so every device and every printout shows the same data.
 - **Audit log** (`GET /api/v1/admin/audit-logs`, paged + filterable) is readable in the app's «سجل العمليات»
   screen. Every service writes through `AuditLogger`; the log is append-only.
+- **Receipts:** one receipt per installment (owner rule 2026-11-03) — `POST /admin/receipts` with several
+  lines returns several numbered receipts in `meta.receipts` (`data` = the first). A down payment in the
+  same call is its own receipt. See DEFAULTS.
 - **Unit editing:** every field stays editable after the unit is sold or rented, `area` and `price_per_meter`
   included (owner decision 2026-11-01). Only `building_id` and `status` are never written by the API; status
   is derived from reservations/contracts.
