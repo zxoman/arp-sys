@@ -4,6 +4,9 @@
 /Arabic RTL Real Estate App (5)/
 /Arabic RTL Real Estate App (5).zip
 
+# Machine-specific deploy settings (server address, passwords) — see .deploy.env.example
+/.deploy.env
+
 # OS / editor
 .DS_Store
 Thumbs.db
