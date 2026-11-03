@@ -12,7 +12,7 @@ import {
   type DataTableProps,
 } from '@/kit'
 import { exportXlsx } from '@/kit/xlsx'
-import { PrintFields, PrintLayout, PrintTable, printDocument } from '@/kit/print'
+import { PrintFields, PrintLayout, PrintTable, printDocument, type PrintCell } from '@/kit/print'
 import { shortcutLabel, useShortcutAction } from '@/kit/shortcuts'
 import { Text } from '@/components/ui'
 import { useData } from '@/lib'
@@ -103,9 +103,11 @@ export type ReportActionsProps<T> = {
   details?: readonly (readonly [string, string])[]
   /** Rows matching this are highlighted red (late payers) in the Excel export. */
   lateRow?: (row: T) => boolean
+  /** Closing row printed under the table (totals), aligned with the same columns. */
+  totalsRow?: readonly PrintCell[]
 }
 
-export function ReportActions<T>({ title, fileName, columns, rows, shareText, details, lateRow }: ReportActionsProps<T>) {
+export function ReportActions<T>({ title, fileName, columns, rows, shareText, details, lateRow, totalsRow }: ReportActionsProps<T>) {
   const toast = useToast()
   const { settings } = useData()
   const exportIt = () => {
@@ -123,7 +125,12 @@ export function ReportActions<T>({ title, fileName, columns, rows, shareText, de
     void printDocument(
       <PrintLayout settings={settings} title={title} subtitle={shareText}>
         {details && details.length > 0 && <PrintFields items={details} />}
-        <PrintTable headers={csv.headers} rows={csv.rows} empty="لا توجد بيانات مطابقة للتصفية الحالية." />
+        <PrintTable
+          headers={csv.headers}
+          rows={csv.rows}
+          footer={totalsRow}
+          empty="لا توجد بيانات مطابقة للتصفية الحالية."
+        />
       </PrintLayout>,
       `${fileName}-${TODAY_ISO}`,
     )

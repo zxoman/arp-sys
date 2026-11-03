@@ -4,6 +4,7 @@ import { toISO } from '@/lib/domain'
 import { CONTRACT_TYPE_TONE, contractTypeLabel } from '../movement/shared'
 import { Combobox, DatePicker, GlassSurface, IconAlert, IconCheckCircle, IconFile, IconPhone, IconUsers, IconWallet, Select, StatusChip, SummaryCard, type Column } from '@/kit'
 import { Text, type BadgeTone } from '@/components/ui'
+import type { PrintCell } from '@/kit/print'
 import { ChartCard, KpiGrid, ReportActions, ReportFilterBar, ReportTable, inRange } from './shared'
 import { serialColumn } from '@/kit/codes'
 import { CODE_LABEL } from '@/lib/codes'
@@ -325,6 +326,18 @@ export default function ReportClientStatement() {
     [],
   )
 
+  /** The printed table closes with a totals row aligned under مدين / دائن / الرصيد. */
+  const totalsRow = useMemo<PrintCell[]>(() => {
+    const values: Record<string, PrintCell> = {
+      date: '',
+      label: 'الإجمالي',
+      debit: Math.round(totals.debit * 100) / 100,
+      credit: Math.round(totals.credit * 100) / 100,
+      balance: Math.round(closing * 100) / 100,
+    }
+    return columns.filter((c) => c.csv !== false).map((c) => values[c.key] ?? '')
+  }, [columns, totals, closing])
+
   const active = !!(contractNumber || from || to)
   const units = useMemo(() => [...new Set(contracts.map((c) => c.unit).filter((u): u is string => !!u))], [contracts])
 
@@ -419,8 +432,11 @@ export default function ReportClientStatement() {
               ['الرقم القومي', picked?.keywords || '—'],
               ['الوحدات', units.length ? units.join('، ') : 'لا توجد'],
               ['الفترة', from || to ? `${from ? fmtDate(from) : 'البداية'} — ${to ? fmtDate(to) : 'اليوم'}` : 'كل الحركات'],
+              ['إجمالي المدين', egp(totals.debit)],
+              ['إجمالي الدائن (المسدد)', egp(totals.credit)],
               ['الرصيد الختامي', egp(closing)],
             ]}
+            totalsRow={totalsRow}
           />
 
           <ChartCard title="عقود العميل" description="عقود العميل وقيم ملخص كل عقد">

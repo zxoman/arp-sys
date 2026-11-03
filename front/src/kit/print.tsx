@@ -150,12 +150,34 @@ export function PrintTable({
   headers,
   rows,
   empty = 'لا توجد بيانات.',
+  footer,
 }: {
   headers: readonly string[]
   rows: readonly (readonly PrintCell[])[]
   empty?: string
+  /** Closing row (totals) printed under the body lines — e.g. total debit / credit / balance. */
+  footer?: readonly PrintCell[]
 }) {
   if (!rows.length) return <p className="pl-empty">{empty}</p>
+  const text = (cell: PrintCell) =>
+    cell == null || cell === ''
+      ? '—'
+      : typeof cell === 'number'
+        ? cell.toLocaleString('en-US')
+        : /^\d{4}-\d{2}-\d{2}$/.test(cell)
+          ? fmtDate(cell)
+          : cell
+  const cells = (row: readonly PrintCell[]) =>
+    row.map((cell, c) => {
+      const value = text(cell)
+      // Dates are short but hyphenated: never let a printed row break them in two lines.
+      const isoDate = typeof cell === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(cell)
+      return (
+        <td key={c} className={isoDate ? 'pl-nowrap' : isNumeric(value) ? 'pl-num' : undefined}>
+          {value}
+        </td>
+      )
+    })
   return (
     <table className={headers.length > 8 ? 'pl-table pl-table-dense' : 'pl-table'}>
       <thead>
@@ -167,24 +189,10 @@ export function PrintTable({
       </thead>
       <tbody>
         {rows.map((row, r) => (
-          <tr key={r}>
-            {row.map((cell, c) => {
-              const text =
-                cell == null || cell === ''
-                  ? '—'
-                  : typeof cell === 'number'
-                    ? cell.toLocaleString('en-US')
-                    : /^\d{4}-\d{2}-\d{2}$/.test(cell)
-                      ? fmtDate(cell)
-                      : cell
-              return (
-                <td key={c} className={isNumeric(text) ? 'pl-num' : undefined}>
-                  {text}
-                </td>
-              )
-            })}
-          </tr>
+          <tr key={r}>{cells(row)}</tr>
         ))}
+        {/* A tfoot row would repeat at the bottom of every printed page; the totals belong once, last. */}
+        {footer && <tr className="pl-total">{cells(footer)}</tr>}
       </tbody>
     </table>
   )

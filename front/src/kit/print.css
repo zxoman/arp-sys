@@ -184,7 +184,8 @@
   overflow-wrap: anywhere;
 }
 /* Amounts, dates and numbers never wrap or split across lines. */
-.pl-table td.pl-num {
+.pl-table td.pl-num,
+.pl-table td.pl-nowrap {
   white-space: nowrap;
   overflow-wrap: normal;
 }
@@ -196,6 +197,14 @@
 }
 .pl-table tr {
   break-inside: avoid;
+}
+/* The closing totals row: same columns, heavier weight, printed once after the last line. */
+.pl-table tr.pl-total td {
+  background: #f3f4f6;
+  font-weight: 800;
+  border-color: #9ca3af;
+  border-top-width: 2px;
+  border-top-color: #4b5563;
 }
 .pl-empty {
   margin: 0;
