@@ -43,7 +43,8 @@ npm run dev                       # http://localhost:8443 (يوجّه /api إل�
 ```
 
 السكربت `deploy.sh` في جذر المشروع: يحدّث نسختك المحلية من GitHub، يشغّل `tsc` + بناء
-`front/dist` (الخادم بلا Node)، يأخذ نسخة احتياطية من قاعدة الخادم، ثم على الخادم: `git pull`
+`front/dist` (الخادم بلا Node)، ثم **يأخذ نسخة احتياطية من قاعدة البيانات قبل أي تعديل على الخادم**
+(`backup:run` + `backup:verify` + نسخة محلية في `~/arp-deploy-backups/`)، ثم على الخادم: `git pull`
 و`composer install --no-dev` و`migrate --force` و`optimize`، وينسخ الواجهة ويضبط الأذونات، وأخيرًا
 يفحص الموقع والـAPI. لو الدخول بكلمة مرور: `SSH_PASS=... ./deploy.sh`.
 

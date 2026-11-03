@@ -147,11 +147,21 @@ SSH_PASS=1234 ./deploy.sh       # when ssh expects a password instead of a key
 ```
 
 It does, in order: fetch + fast-forward `master` locally, `tsc --noEmit`, `VITE_API_URL=/api/v1 npm
-run build`, a `php artisan backup:run --prune` on the server, `git pull` + `composer install
---no-dev` there, `php artisan down`, `migrate --force`, `optimize`, `rsync --delete front/dist/`,
-`php artisan up`, then a smoke check of the front (expects 200) and the API (expects 401). It refuses
-to run on a dirty tree or a local `master` that is not pushed, and it puts the site back up if any
-step fails.
+run build`, then **a database backup before anything on the server changes** — `php artisan
+backup:run --prune`, `backup:verify` (an archive that does not open is not a backup) and a copy of the
+`.tar.gz` to `~/arp-deploy-backups/` here (override with `DEPLOY_BACKUP_DIR`, skip with
+`--no-fetch-backup`). Only after that: `git pull` + `composer install --no-dev` on the server,
+`php artisan down`, `migrate --force`, `optimize`, `rsync --delete front/dist/`, `php artisan up`,
+then a smoke check of the front (expects 200) and the API (expects 401). It refuses to run on a dirty
+tree or a local `master` that is not pushed, refuses to migrate when the backup fails, and puts the
+site back up if any step fails.
+
+The backup archive holds the database dump, the sensitive `.env` keys and a manifest. If a deploy goes
+wrong, the error message prints the archive name; restore with:
+
+```bash
+ssh server@192.168.1.50 'cd /var/www/arp-sys/backend && php artisan backup:restore <archive>.tar.gz --force'
+```
 
 Doing it by hand:
 

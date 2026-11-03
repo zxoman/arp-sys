@@ -9,7 +9,8 @@
 #
 #   ./deploy.sh                     # origin/master → server@192.168.1.50
 #   ./deploy.sh --no-build          # backend only (no tsc/build/rsync)
-#   ./deploy.sh --skip-backup       # do not take a database backup before migrating
+#   ./deploy.sh --skip-backup       # no database backup at all (not recommended)
+#   ./deploy.sh --no-fetch-backup   # back up on the server only, no local copy
 #   ./deploy.sh --allow-dirty       # deploy even if the tree is not clean (front from the tree)
 #   ./deploy.sh --dry-run           # print every step, change nothing
 #
@@ -21,9 +22,10 @@
 #   REMOTE_PHP     php                   PHP binary on the server
 #   SSH_PASS       -                     password for ssh/rsync (needs sshpass); prefer ssh keys
 #   SUDO_PASS      -                     password for the storage-ownership step (optional)
+#   DEPLOY_BACKUP_DIR  ~/arp-deploy-backups   where the archive is copied locally
 #
-# Order: local pull → typecheck/build → server backup → server pull → composer → maintenance →
-# migrate → optimize → copy front → permissions → up → smoke check.
+# Order: local pull → typecheck/build → **database backup (verified)** → server pull → composer →
+# maintenance → migrate → optimize → copy front → permissions → up → smoke check.
 #
 set -Eeuo pipefail
 
@@ -35,13 +37,16 @@ SITE_URL="${DEPLOY_URL:-http://${HOST#*@}}"
 SSH_PASS="${SSH_PASS:-}"
 SUDO_PASS="${SUDO_PASS:-}"
 OWNER="${HOST%%@*}"   # ssh user, used for chown
+LOCAL_BACKUP_DIR="${DEPLOY_BACKUP_DIR:-$HOME/arp-deploy-backups}"
 
 DO_BUILD=1
 DO_TYPECHECK=1
 DO_BACKUP=1
+DO_FETCH_BACKUP=1
 ALLOW_DIRTY=0
 DRY_RUN=0
 MAINTENANCE=0
+BACKUP_FILE=''
 
 # ── output ────────────────────────────────────────────────────────────────────
 step() { printf '\n\033[1;36m▸ %s\033[0m\n' "$*"; }
@@ -59,6 +64,7 @@ for arg in "$@"; do
     --no-build) DO_BUILD=0 ;;
     --no-typecheck) DO_TYPECHECK=0 ;;
     --skip-backup) DO_BACKUP=0 ;;
+    --no-fetch-backup) DO_FETCH_BACKUP=0 ;;
     --allow-dirty) ALLOW_DIRTY=1 ;;
     --dry-run) DRY_RUN=1 ;;
     -h | --help) usage ;;
@@ -97,6 +103,10 @@ remote() { # remote '<shell line>'
 on_error() {
   local line="$1"
   printf '\n\033[1;31m✗ deploy failed (line %s)\033[0m\n' "$line" >&2
+  if [[ -n "$BACKUP_FILE" ]]; then
+    warn "pre-deploy backup: $BACKUP_FILE"
+    warn "restore it with: ssh $HOST \"cd '$REMOTE_PATH/backend' && $REMOTE_PHP artisan backup:restore $(basename "$BACKUP_FILE") --force\""
+  fi
   if ((MAINTENANCE)); then
     warn 'the site is in maintenance mode — bringing it back up'
     "${SSH[@]}" "$HOST" "cd '$REMOTE_PATH/backend' && $REMOTE_PHP artisan up" || true
@@ -169,13 +179,39 @@ else
   note 'skipping the front build (--no-build)'
 fi
 
-# ── 4. backup before touching the database ───────────────────────────────────
+# ── 4. database backup — before anything on the server changes ───────────────
 if ((DO_BACKUP)); then
-  step 'Backing up the server (database + env keys)'
-  remote "cd '$REMOTE_PATH/backend' && $REMOTE_PHP artisan backup:run --prune" ||
-    die 'the pre-deploy backup failed; fix it or pass --skip-backup (not recommended)'
+  step 'Backing up the server database (before any change)'
+  if ((DRY_RUN)); then
+    remote "cd '$REMOTE_PATH/backend' && $REMOTE_PHP artisan backup:run --prune"
+    remote "cd '$REMOTE_PATH/backend' && $REMOTE_PHP artisan backup:verify"
+    ((DO_FETCH_BACKUP)) && note "[dry-run] rsync $HOST:<archive> → $LOCAL_BACKUP_DIR/"
+  else
+    BACKUP_OUT="$(remote "cd '$REMOTE_PATH/backend' && $REMOTE_PHP artisan backup:run --prune")" ||
+      die 'the pre-deploy backup failed; refusing to change the server (fix it, or pass --skip-backup — not recommended)'
+    printf '%s\n' "$BACKUP_OUT" | sed 's/^/  /'
+
+    # `backup:run` prints «Backup written: /path/archive.tar.gz (12.3 KB)».
+    BACKUP_FILE="$(printf '%s\n' "$BACKUP_OUT" | sed -n 's/^.*Backup written: \(.*\) ([0-9.]* KB)$/\1/p' | tail -n 1)"
+    [[ -n "$BACKUP_FILE" ]] ||
+      die 'backup:run wrote no archive (is BACKUP_ENABLED=false?); refusing to migrate without a backup — use --skip-backup to override'
+
+    # An archive that cannot be opened is not a backup: verify it before migrating.
+    remote "cd '$REMOTE_PATH/backend' && $REMOTE_PHP artisan backup:verify '$(basename "$BACKUP_FILE")'" | sed 's/^/  /' ||
+      die "the new backup does not verify ($(basename "$BACKUP_FILE")); refusing to continue"
+    note "restore point: $BACKUP_FILE"
+
+    if ((DO_FETCH_BACKUP)); then
+      mkdir -p "$LOCAL_BACKUP_DIR"
+      if rsync -az -e "${RSYNC_SSH[*]}" "$HOST:$BACKUP_FILE" "$LOCAL_BACKUP_DIR/"; then
+        note "local copy: $LOCAL_BACKUP_DIR/$(basename "$BACKUP_FILE")"
+      else
+        warn "could not copy the archive to $LOCAL_BACKUP_DIR (it is still on the server)"
+      fi
+    fi
+  fi
 else
-  warn 'skipping the pre-deploy backup (--skip-backup)'
+  warn 'NO database backup before this deploy (--skip-backup)'
 fi
 
 if ((DRY_RUN)); then
