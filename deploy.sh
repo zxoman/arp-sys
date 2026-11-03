@@ -264,13 +264,44 @@ if ((DO_BUILD)); then
 fi
 
 # ── 8. permissions ───────────────────────────────────────────────────────────
+# PHP-FPM (www-data) writes to storage/ and bootstrap/cache. After composer/artisan the deploy user
+# owns those files, so the group bits are enough and no root is needed; only a full chown does. This
+# step never aborts the deploy: the new code and the built front are already in place, and wrong
+# permissions show up as a 500 in the app, not as a broken deployment.
 step 'Fixing storage permissions'
-if [[ -n "$SUDO_PASS" ]]; then
-  printf '%s\n' "$SUDO_PASS" |
-    "${SSH[@]}" -T "$HOST" "sudo -S -p '' chown -R $OWNER:www-data '$REMOTE_PATH/backend/storage' '$REMOTE_PATH/backend/bootstrap/cache' && sudo -n chmod -R 775 '$REMOTE_PATH/backend/storage' '$REMOTE_PATH/backend/bootstrap/cache'"
+STORAGE_DIR="$REMOTE_PATH/backend/storage"
+CACHE_DIR="$REMOTE_PATH/backend/bootstrap/cache"
+CHOWN_CMD="chown -R $OWNER:www-data '$STORAGE_DIR' '$CACHE_DIR' && chmod -R 775 '$STORAGE_DIR' '$CACHE_DIR'"
+# Prints the first entries that are not «group www-data + group-writable»; empty means all good.
+STORAGE_CHECK="cd '$REMOTE_PATH/backend' && find storage bootstrap/cache -not \\( -group www-data -a -perm -g+w \\) | head -n 3"
+FIX_BY_HAND="ssh $HOST 'sudo chown -R $OWNER:www-data $STORAGE_DIR $CACHE_DIR'"
+
+if ((DRY_RUN)); then
+  note "[dry-run] ssh $HOST: chgrp -R www-data storage bootstrap/cache; chmod -R g+rwX storage bootstrap/cache"
+  note "[dry-run] ssh $HOST: $STORAGE_CHECK"
+  note "[dry-run] ssh $HOST: sudo sh -c '<chown -R $OWNER:www-data … && chmod -R 775 …>' (only when the group bits are not enough)"
 else
-  remote "cd '$REMOTE_PATH/backend' && chmod -R g+rwX storage bootstrap/cache && chgrp -R www-data storage bootstrap/cache" ||
-    warn 'could not adjust group permissions (set SUDO_PASS=... to chown as root)'
+  # Best effort as the deploy user; failures here are expected for files www-data already owns.
+  remote "cd '$REMOTE_PATH/backend' && { chgrp -R www-data storage bootstrap/cache ; chmod -R g+rwX storage bootstrap/cache ; } 2>/dev/null || true"
+  offenders="$(remote "$STORAGE_CHECK" 2>/dev/null || true)"
+  if [[ -z "$offenders" ]]; then
+    note 'www-data can write storage/ and bootstrap/cache'
+  elif [[ -n "$SUDO_PASS" ]]; then
+    note 'the group bits were not enough — fixing the ownership as root'
+    sudo_perms() { # $1 = ssh tty flag: '' (no tty) or '-tt' (some sudoers insist on a terminal)
+      printf '%s\n' "$SUDO_PASS" |
+        "${SSH[@]}" $1 -T "$HOST" "sudo -S -p '' sh -c \"$CHOWN_CMD\""
+    }
+    if sudo_perms '' || sudo_perms '-tt'; then
+      note 'ownership fixed with sudo'
+    else
+      warn 'could not chown storage as root (wrong SUDO_PASS, or sudo refuses without a real terminal)'
+      warn "the deploy continues; fix it by hand when convenient: $FIX_BY_HAND"
+    fi
+  else
+    warn 'www-data may not be able to write storage/ and bootstrap/cache'
+    warn "fix it with: $FIX_BY_HAND   (or pass SUDO_PASS=... so the script does it)"
+  fi
 fi
 
 # ── 9. back online + smoke check ─────────────────────────────────────────────

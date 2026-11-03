@@ -156,6 +156,16 @@ then a smoke check of the front (expects 200) and the API (expects 401). It refu
 tree or a local `master` that is not pushed, refuses to migrate when the backup fails, and puts the
 site back up if any step fails.
 
+Storage permissions are the last step and **never abort a deploy**: it sets the group bits as the
+deploy user, checks that `www-data` can really write `storage/` and `bootstrap/cache/`, and only when
+that is not enough tries a root `chown` (with `SUDO_PASS`, once without and once with a tty). If sudo
+still refuses — e.g. a sudoers rule that needs a real terminal — it prints a warning with the exact
+command and finishes normally. Run that by hand on the server:
+
+```bash
+sudo chown -R server:www-data /var/www/arp-sys/backend/storage /var/www/arp-sys/backend/bootstrap/cache
+```
+
 The backup archive holds the database dump, the sensitive `.env` keys and a manifest. If a deploy goes
 wrong, the error message prints the archive name; restore with:
 
