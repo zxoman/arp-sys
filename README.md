@@ -38,8 +38,14 @@ npm run dev                       # http://localhost:8443 (يوجّه /api إل�
 التحديث لاحقًا) في `backend/docs/DEPLOY.md`.
 
 ```bash
-cd front && VITE_API_URL=/api/v1 npm run build     # ثم انسخ front/dist إلى الخادم
+./deploy.sh                 # يسحب آخر master ← يبني الواجهة ← ينشر على 192.168.1.50
+./deploy.sh --dry-run       # اعرض كل خطوة بدون أي تغيير
 ```
+
+السكربت `deploy.sh` في جذر المشروع: يحدّث نسختك المحلية من GitHub، يشغّل `tsc` + بناء
+`front/dist` (الخادم بلا Node)، يأخذ نسخة احتياطية من قاعدة الخادم، ثم على الخادم: `git pull`
+و`composer install --no-dev` و`migrate --force` و`optimize`، وينسخ الواجهة ويضبط الأذونات، وأخيرًا
+يفحص الموقع والـAPI. لو الدخول بكلمة مرور: `SSH_PASS=... ./deploy.sh`.
 
 السيرفر متاح بالاسم المحلي **http://aqar.lan/** كذلك (dnsmasq على السيرفر يوزّعه على الشبكة) —
 تفاصيله وطريقة تفعيله على كل الأجهزة في `backend/docs/DEPLOY.md` قسم «A local domain».
@@ -48,7 +54,7 @@ cd front && VITE_API_URL=/api/v1 npm run build     # ثم انسخ front/dist إ
 
 ```bash
 cd backend
-php artisan test                  # 186 اختبار Pest (وحدات + ميزات)
+php artisan test                  # 187 اختبار Pest (وحدات + ميزات)
 vendor/bin/pint                   # تنسيق الكود
 ```
 

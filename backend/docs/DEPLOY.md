@@ -135,12 +135,32 @@ Re-run `php artisan optimize` after every deploy that changes `.env` or routes.
 
 ## Updating a running server
 
+Run `./deploy.sh` from the repository root on the machine that has Node.js (this one):
+
 ```bash
-cd /var/www/arp-sys
-git pull
-cd backend && composer install --no-dev --prefer-dist --optimize-autoloader \
-  && php artisan migrate --force && php artisan optimize
-# and rsync a fresh front/dist when the front changed
+./deploy.sh                     # origin/master → server@192.168.1.50
+SSH_PASS=1234 ./deploy.sh       # when ssh expects a password instead of a key
+./deploy.sh --no-build          # backend only
+./deploy.sh --skip-backup       # no database backup before migrating (not recommended)
+./deploy.sh --allow-dirty       # deploy an unclean tree (front built from the tree)
+./deploy.sh --dry-run           # print the steps, change nothing
+```
+
+It does, in order: fetch + fast-forward `master` locally, `tsc --noEmit`, `VITE_API_URL=/api/v1 npm
+run build`, a `php artisan backup:run --prune` on the server, `git pull` + `composer install
+--no-dev` there, `php artisan down`, `migrate --force`, `optimize`, `rsync --delete front/dist/`,
+`php artisan up`, then a smoke check of the front (expects 200) and the API (expects 401). It refuses
+to run on a dirty tree or a local `master` that is not pushed, and it puts the site back up if any
+step fails.
+
+Doing it by hand:
+
+```bash
+cd front && VITE_API_URL=/api/v1 npm run build
+rsync -az --delete front/dist/ server@192.168.1.50:/var/www/arp-sys/front/dist/
+ssh server@192.168.1.50 'cd /var/www/arp-sys && git pull \
+  && cd backend && composer install --no-dev --prefer-dist --optimize-autoloader \
+  && php artisan migrate --force && php artisan optimize'
 ```
 
 No queue worker and no scheduler are needed: the app dispatches no queued jobs and registers no
