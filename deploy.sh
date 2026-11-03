@@ -24,10 +24,24 @@
 #   SUDO_PASS      -                     password for the storage-ownership step (optional)
 #   DEPLOY_BACKUP_DIR  ~/arp-deploy-backups   where the archive is copied locally
 #
+# Any of the above can be put in an untracked .deploy.env next to this script instead of being typed
+# on every run (copy .deploy.env.example). It is git-ignored, so the tree stays clean.
+#
 # Order: local pull → typecheck/build → **database backup (verified)** → server pull → composer →
 # maintenance → migrate → optimize → copy front → permissions → up → smoke check.
 #
 set -Eeuo pipefail
+
+# Local, machine-specific settings (server address, passwords) live in an untracked .deploy.env —
+# see .deploy.env.example. Sourcing it first lets those values fill the defaults below while keeping
+# the repository clean (the deploy refuses to run on a dirty tree).
+DEPLOY_ENV_FILE="${DEPLOY_ENV_FILE:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/.deploy.env}"
+if [[ -f "$DEPLOY_ENV_FILE" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  . "$DEPLOY_ENV_FILE"
+  set +a
+fi
 
 HOST="${DEPLOY_HOST:-server@192.168.1.50}"
 REMOTE_PATH="${DEPLOY_PATH:-/var/www/arp-sys}"
@@ -129,7 +143,7 @@ if [[ -n "$(git status --porcelain)" ]]; then
   if ((ALLOW_DIRTY)); then
     warn 'working tree is not clean — the front is built from the tree, not from GitHub'
   else
-    die 'working tree is not clean; commit/push first, or pass --allow-dirty'
+    die 'working tree is not clean; commit/push first, or pass --allow-dirty (machine settings belong in .deploy.env, which is ignored)'
   fi
 fi
 
