@@ -118,6 +118,15 @@ Data loading is server-side on the eight collection pages, the wired reports and
 - **Paged lists in parallel.** `fetchAllBuildings` / `fetchAllClients` / `fetchReservableUnits` read page 1 to learn `last_page`, then fetch the remaining pages together instead of one round trip each.
 - Dev-mode page *boot* (~0.6–1s) is Vite compiling/serving the module graph and is unrelated to the API; hash navigation between pages afterwards costs one ~0.1s request.
 
+## Printing
+
+Every printable document goes through `src/kit/print.tsx` + `print.css` (`PrintLayout` → `printDocument`, which renders into an off-screen `#print-root` and prints only that):
+
+- **The company header prints on the first page only and the footer on the last page only.** `PrintLayout` is a plain flow (`.pl-head` / `.pl-title` / `.pl-body` / `.pl-foot`), deliberately **not** a `thead`/`tfoot` frame — a repeating frame would put the header and footer on every sheet. Do not wrap it back into a table to "repeat" them: `break-inside: avoid` + `break-after: avoid` on the head/title and `break-before: avoid` on the footer keep each block whole without repeating it. Column headers of `PrintTable` are still a real `thead`, so a table that spans pages repeats *its* headers (that is wanted).
+- No page numbers: Chrome ignores `@page` margin boxes (`@bottom-left { content: counter(page) }`), so numbering per sheet cannot be done without repeating a fixed block. `@page` is A4 portrait, `12mm 14mm`; `printDocument` switches to landscape when a printed table has more than 7 columns.
+- A totals row must stay inside `tbody` (`PrintTable#footer` → `tr.pl-total`); a real `tfoot` would repeat on every page.
+- Verify a layout change with `google-chrome --headless=new --no-pdf-header-footer --print-to-pdf=/tmp/x.pdf <url>` and read the pages with `pdftotext -f N -l N` / `pdftoppm` — the header must appear on page 1 only and the footer on the last page only.
+
 ## Dependencies
 
 - Runtime: React 19 and React DOM 19

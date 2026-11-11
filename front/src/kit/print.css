@@ -5,6 +5,8 @@
   display: none;
 }
 
+/* Flow layout, deliberately not a thead/tfoot frame: the company header is printed once on the first
+   page and the footer once at the end, so long documents do not repeat them on every sheet. */
 .pl-doc {
   color-scheme: light;
   color: #111827;
@@ -24,18 +26,8 @@
   print-color-adjust: exact;
 }
 
-.pl-frame {
-  width: 100%;
-  border-collapse: collapse;
-}
-.pl-frame > thead > tr > td,
-.pl-frame > tfoot > tr > td,
-.pl-frame > tbody > tr > td {
-  padding: 0;
-  vertical-align: top;
-}
-
-/* Header: company logo (right) · text (centre) · our logo (left). RTL grid: first column is right. */
+/* Header: company logo (right) · text (centre) · our logo (left). RTL grid: first column is right.
+   Printed once, on the first page — it must never be left alone at the foot of a sheet. */
 .pl-head {
   display: grid;
   grid-template-columns: 1fr minmax(0, 2.4fr) 1fr;
@@ -44,6 +36,8 @@
   padding-bottom: 12px;
   margin-bottom: 18px;
   border-bottom: 3px double #1f2937;
+  break-inside: avoid;
+  break-after: avoid;
 }
 .pl-head-logo {
   display: flex;
@@ -79,6 +73,8 @@
 .pl-title {
   margin-bottom: 14px;
   text-align: center;
+  break-inside: avoid;
+  break-after: avoid;
 }
 .pl-title h1 {
   margin: 0;
@@ -97,12 +93,15 @@
   font-size: 12px;
 }
 
+/* Block flow (not grid) so a long document fragments cleanly between pages in every browser. */
 .pl-body {
-  display: grid;
-  gap: 14px;
+  display: flow-root;
+}
+.pl-body > * + * {
+  margin-top: 14px;
 }
 
-/* Footer: text · page number + small our logo */
+/* Footer: text + small our logo. Printed once, after the last line of the document — never alone. */
 .pl-foot {
   display: flex;
   align-items: center;
@@ -113,6 +112,8 @@
   border-top: 1px solid #d1d5db;
   color: #374151;
   font-size: 11.5px;
+  break-inside: avoid;
+  break-before: avoid;
 }
 .pl-foot-end {
   display: inline-flex;
@@ -127,6 +128,7 @@
   flex-shrink: 0;
 }
 .pl-foot-qr {
+  flex: none;
   width: 64px;
   height: 64px;
 }
@@ -281,14 +283,10 @@
   font-size: 9.5px;
 }
 
+/* No running header/footer margin boxes: the header and footer are content, printed once. */
 @page {
   size: A4 portrait;
-  margin: 14mm 14mm 18mm;
-  @bottom-left {
-    content: 'صفحة ' counter(page) ' من ' counter(pages);
-    font-size: 9pt;
-    color: #6b7280;
-  }
+  margin: 12mm 14mm;
 }
 
 @media print {
@@ -392,10 +390,6 @@
   }
   html.is-printing #print-root {
     display: block;
-  }
-  /* The page number is drawn by the @page margin box so it counts every page. */
-  .pl-page {
-    display: none;
   }
   .pl-doc {
     font-size: 11.5pt;

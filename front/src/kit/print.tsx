@@ -3,7 +3,8 @@
  *
  *   PrintLayout   A4 · RTL sheet: header (company logo right · name/address/phone centred · our
  *                 logo left), title + print date, content, footer (our logo + page number).
- *                 The header/footer repeat on every printed page.
+ *                 The header prints on the first page and the footer on the last one only — neither
+ *                 repeats, so a long document is not padded with repeated blocks on every sheet.
  *   printDocument Renders a document into an off-screen #print-root, waits for logos to decode,
  *                 prints, and cleans up. While printing, everything else on the page is hidden.
  *   PrintTable / PrintFields / PrintSection / PrintAmount / PrintSignatures — document blocks.
@@ -95,47 +96,28 @@ export function PrintLayout({ settings, title, subtitle, printedAt = new Date(),
   const ours = ourLogoOf(settings)
   return (
     <div className={['pl-doc', preview && 'pl-preview', className].filter(Boolean).join(' ')} dir="rtl" lang="ar">
-      {/* The table frame repeats thead/tfoot on every printed page. */}
-      <table className="pl-frame" role="presentation">
-        <thead>
-          <tr>
-            <td>
-              <PrintHeader settings={settings} />
-            </td>
-          </tr>
-        </thead>
-        <tfoot>
-          <tr>
-            <td>
-              <div className="pl-foot">
-                <span className="pl-foot-text">
-                  {[settings.companyName, settings.projectName].filter(Boolean).join(' · ')} · طُبع في{' '}
-                  <bdi dir="ltr">{printStamp(printedAt)}</bdi>
-                  <span className="pl-page">صفحة 1</span>
-                </span>
-                <span className="pl-foot-brand">
-                  <QrCode value={settings.developerUrl?.trim() || DEFAULT_QR_URL} className="pl-foot-qr" />
-                  {ours && <img src={ours} alt="شعار المشروع" className="pl-foot-logo" />}
-                </span>
-              </div>
-            </td>
-          </tr>
-        </tfoot>
-        <tbody>
-          <tr>
-            <td>
-              <div className="pl-title">
-                <h1>{title}</h1>
-                {subtitle && <p className="pl-subtitle">{subtitle}</p>}
-                <p className="pl-date">
-                  تاريخ الطباعة: <bdi dir="ltr">{printStamp(printedAt)}</bdi>
-                </p>
-              </div>
-              <div className="pl-body">{children}</div>
-            </td>
-          </tr>
-        </tbody>
-      </table>
+      {/* Plain flow, not a thead/tfoot frame: a repeating header/footer on every sheet wastes the page.
+          The header stays at the top of page 1, the footer at the end of the last page, and the content
+          between them breaks naturally (tables inside still repeat their own column headers). */}
+      <PrintHeader settings={settings} />
+      <div className="pl-title">
+        <h1>{title}</h1>
+        {subtitle && <p className="pl-subtitle">{subtitle}</p>}
+        <p className="pl-date">
+          تاريخ الطباعة: <bdi dir="ltr">{printStamp(printedAt)}</bdi>
+        </p>
+      </div>
+      <div className="pl-body">{children}</div>
+      <div className="pl-foot">
+        <span className="pl-foot-text">
+          {[settings.companyName, settings.projectName].filter(Boolean).join(' · ')} · طُبع في{' '}
+          <bdi dir="ltr">{printStamp(printedAt)}</bdi>
+        </span>
+        <span className="pl-foot-brand">
+          <QrCode value={settings.developerUrl?.trim() || DEFAULT_QR_URL} className="pl-foot-qr" />
+          {ours && <img src={ours} alt="شعار المشروع" className="pl-foot-logo" />}
+        </span>
+      </div>
     </div>
   )
 }
