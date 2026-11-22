@@ -107,11 +107,17 @@ must stay easy to change and be listed in `docs/DEFAULTS.md`.
   search; the `email` column was dropped; see BRIEF 2.4.
 - Reservations (2026-10-28): `unit_price` was REMOVED (no price on a reservation, no deposit ceiling and no
   "remaining"; the price is agreed with the contract), `unit_type`/`unit_activity` are nullable for building-level
-  reservations, and the general `PUT /reservations/{id}` endpoint is gone (cancel/convert only); see BRIEF 2.5.
+  reservations; see BRIEF 2.5. Editing (2026-11-21): `PUT /admin/reservations/{id}` changes an ACTIVE
+  reservation's client, unit/building (old unit → available, new unit → reserved) and date; converted/cancelled
+  are locked and payments are managed by their own endpoints.
 - Contracts (2026-10-29): the screen model is in the API — `draft` status, free `schedule[]`, company `discount`,
   lease terms, `POST /contracts/{id}/post`, and list `search`/`sort`/`per_page` + `meta.counts` (per type, before the
   type filter). Cancelling a contract marks its installments `cancelled` (`InstallmentStatus::cancelled`, never deleted)
-  and they stop being collectable; see DEFAULTS "Contracts screen model".
+  and they stop being collectable; see DEFAULTS "Contracts screen model". Editing (2026-11-21):
+  `PUT /admin/contracts/{id}` — a draft changes freely; an active contract may change money too, but only
+  `paid_amount = 0` rows are re-planned, paid rows keep their amount/date, receipts are untouched, the price/down
+  payment may not fall below what was collected, and the caller sends `schedule[]` with `installment_id` for
+  existing rows. Type changes and cancelled contracts are rejected. See DEFAULTS "Editing a deal".
 - Receipts (2026-10-29): the collection page is wired. `receipts` (number `R-YYYY-NNNNN` per year, contract,
   paid_at, method, reference, total, status) groups the payment lines through the nullable
   `installment_payments.receipt_id` / `contract_down_payments.receipt_id`, so one receipt covers several

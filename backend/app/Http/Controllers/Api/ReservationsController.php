@@ -7,11 +7,11 @@ use App\Http\Requests\Reservations\CancelReservationPaymentRequest;
 use App\Http\Requests\Reservations\CancelReservationRequest;
 use App\Http\Requests\Reservations\CreateReservationPaymentRequest;
 use App\Http\Requests\Reservations\StoreReservationRequest;
+use App\Http\Requests\Reservations\UpdateReservationRequest;
 use App\Http\Resources\Reservations\ReservationPaymentResource;
 use App\Http\Resources\Reservations\ReservationResource;
 use App\Models\Reservation;
 use App\Models\ReservationPayment;
-use App\Policies\ReservationPolicy;
 use App\Services\Reservations\ReservationPaymentService;
 use App\Services\Reservations\ReservationService;
 use Illuminate\Http\JsonResponse;
@@ -85,6 +85,17 @@ class ReservationsController extends Controller
 
         return response()->json([
             'data' => new ReservationResource($reservation->load('client', 'building', 'unit', 'payments')),
+        ]);
+    }
+
+    public function update(UpdateReservationRequest $request, Reservation $reservation): JsonResponse
+    {
+        $this->authorize('update', $reservation);
+
+        $reservation = $this->reservationService->update($reservation, $request->validated(), $request->user());
+
+        return response()->json([
+            'data' => new ReservationResource($reservation),
         ]);
     }
 

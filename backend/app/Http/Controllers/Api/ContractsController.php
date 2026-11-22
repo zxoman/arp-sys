@@ -9,16 +9,15 @@ use App\Http\Requests\Contracts\PostContractRequest;
 use App\Http\Requests\Contracts\PreviewScheduleRequest;
 use App\Http\Requests\Contracts\RecordInstallmentPaymentRequest;
 use App\Http\Requests\Contracts\StoreContractRequest;
+use App\Http\Requests\Contracts\UpdateContractRequest;
 use App\Http\Resources\Contracts\ContractResource;
 use App\Http\Resources\Contracts\InstallmentResource;
 use App\Models\Contract;
 use App\Models\Installment;
 use App\Models\InstallmentPayment;
-use App\Policies\ContractPolicy;
 use App\Services\Contracts\ContractService;
 use App\Services\Contracts\InstallmentService;
 use Illuminate\Http\JsonResponse;
-use Illuminate\Http\Request;
 
 class ContractsController extends Controller
 {
@@ -120,6 +119,17 @@ class ContractsController extends Controller
         ]);
     }
 
+    public function update(UpdateContractRequest $request, Contract $contract): JsonResponse
+    {
+        $this->authorize('contracts.update', $contract);
+
+        $contract = $this->contractService->update($contract, $request->validated(), $request->user());
+
+        return response()->json([
+            'data' => new ContractResource($contract),
+        ]);
+    }
+
     public function postContract(PostContractRequest $request, Contract $contract): JsonResponse
     {
         $this->authorize('contracts.update', $contract);
@@ -157,43 +167,41 @@ class ContractsController extends Controller
         ]);
     }
 
-public function recordInstallmentPayment(
-    RecordInstallmentPaymentRequest $request,
-    Contract $contract,
-    Installment $installment
-): JsonResponse
-{
-    $this->authorize('contracts.update', $contract);
+    public function recordInstallmentPayment(
+        RecordInstallmentPaymentRequest $request,
+        Contract $contract,
+        Installment $installment
+    ): JsonResponse {
+        $this->authorize('contracts.update', $contract);
 
-    $this->installmentService->recordPayment(
-        $contract->id,
-        $installment->id,
-        $request->validated(),
-        $request->user()
-    );
+        $this->installmentService->recordPayment(
+            $contract->id,
+            $installment->id,
+            $request->validated(),
+            $request->user()
+        );
 
-    return response()->json([
-        'data' => new InstallmentResource($installment->fresh()),
-    ], 201);
-}
+        return response()->json([
+            'data' => new InstallmentResource($installment->fresh()),
+        ], 201);
+    }
 
-public function cancelInstallmentPayment(
-    CancelInstallmentPaymentRequest $request,
-    Contract $contract,
-    Installment $installment,
-    InstallmentPayment $payment
-): JsonResponse
-{
-    $this->authorize('contracts.update', $contract);
+    public function cancelInstallmentPayment(
+        CancelInstallmentPaymentRequest $request,
+        Contract $contract,
+        Installment $installment,
+        InstallmentPayment $payment
+    ): JsonResponse {
+        $this->authorize('contracts.update', $contract);
 
-    $this->installmentService->cancelPayment(
-        $payment,
-        $request->validated('cancel_reason'),
-        $request->user()
-    );
+        $this->installmentService->cancelPayment(
+            $payment,
+            $request->validated('cancel_reason'),
+            $request->user()
+        );
 
-    return response()->json([
-        'data' => new InstallmentResource($installment->fresh()),
-    ]);
-}
+        return response()->json([
+            'data' => new InstallmentResource($installment->fresh()),
+        ]);
+    }
 }

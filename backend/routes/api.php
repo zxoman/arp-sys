@@ -82,6 +82,7 @@ Route::prefix('v1')->group(function () {
         Route::get('/reservations', [ReservationsController::class, 'index']);
         Route::post('/reservations', [ReservationsController::class, 'store']);
         Route::get('/reservations/{reservation}', [ReservationsController::class, 'show']);
+        Route::put('/reservations/{reservation}', [ReservationsController::class, 'update']);
         Route::post('/reservations/{reservation}/cancel', [ReservationsController::class, 'cancel']);
         Route::post('/reservations/{reservation}/convert', [ReservationsController::class, 'convert']);
         Route::get('/reservations/{reservation}/payments', [ReservationsController::class, 'payments']);
@@ -92,6 +93,7 @@ Route::prefix('v1')->group(function () {
         Route::get('/contracts', [ContractsController::class, 'index']);
         Route::post('/contracts', [ContractsController::class, 'store']);
         Route::get('/contracts/{contract}', [ContractsController::class, 'show']);
+        Route::put('/contracts/{contract}', [ContractsController::class, 'update']);
         Route::post('/contracts/{contract}/cancel', [ContractsController::class, 'cancel']);
         Route::post('/contracts/{contract}/post', [ContractsController::class, 'postContract']);
         Route::post('/contracts/preview-schedule', [ContractsController::class, 'preview']);

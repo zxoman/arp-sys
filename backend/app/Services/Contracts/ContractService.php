@@ -2,19 +2,22 @@
 
 namespace App\Services\Contracts;
 
-use App\Models\Contract;
-use App\Models\ContractDownPayment;
-use App\Models\Installment;
-use App\Models\Reservation;
-use App\Models\Unit;
 use App\Enums\AuditAction;
 use App\Enums\ContractStatus;
 use App\Enums\ContractType;
 use App\Enums\InstallmentStatus;
 use App\Enums\PaymentStatus;
+use App\Enums\ReservationStatus;
 use App\Enums\UnitStatus;
+use App\Models\Contract;
+use App\Models\ContractDownPayment;
+use App\Models\Installment;
+use App\Models\Reservation;
+use App\Models\Unit;
 use App\Services\Audit\AuditLogger;
+use App\Support\Money\MoneyCalculator;
 use App\Support\Transactions\Operation;
+use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
@@ -24,8 +27,7 @@ class ContractService
         private Operation $operation,
         private AuditLogger $audit,
         private InstallmentService $installments
-    ) {
-    }
+    ) {}
 
     /**
      * Create a contract.
@@ -46,12 +48,12 @@ class ContractService
 
             // If from reservation, lock reservation and auto-fill client/unit
             $reservation = null;
-            if (!empty($data['reservation_id'])) {
+            if (! empty($data['reservation_id'])) {
                 $reservation = Reservation::where('id', $data['reservation_id'])
                     ->where('status', 'active')
                     ->first();
 
-                if (!$reservation) {
+                if (! $reservation) {
                     throw ValidationException::withMessages([
                         'reservation_id' => __('contracts.reservation_not_found_or_not_active'),
                     ]);
@@ -63,7 +65,7 @@ class ContractService
                 $data['type'] = $type = $data['type'] ?? ContractType::SALE->value;
 
                 // If no unit on reservation yet, must be assigned first
-                if (!$reservation->unit_id) {
+                if (! $reservation->unit_id) {
                     throw ValidationException::withMessages([
                         'unit_id' => __('contracts.reservation_has_no_unit'),
                     ]);
@@ -73,7 +75,7 @@ class ContractService
             }
 
             // Validate direct contract on unit with active reservation is blocked
-            if (!$reservation && $data['unit_id']) {
+            if (! $reservation && $data['unit_id']) {
                 $unit = Unit::find($data['unit_id']);
                 if ($unit && $unit->reservations()->where('status', 'active')->exists()) {
                     throw ValidationException::withMessages([
@@ -85,7 +87,7 @@ class ContractService
             // Validate unit belongs to same building as reservation's building if both set
             if ($data['unit_id'] ?? null) {
                 $unit = Unit::find($data['unit_id']);
-                if (!$unit) {
+                if (! $unit) {
                     throw ValidationException::withMessages([
                         'unit_id' => __('contracts.unit_not_found'),
                     ]);
@@ -136,7 +138,7 @@ class ContractService
                 'discount_reason' => $data['discount_reason'] ?? null,
                 'agreed_down_payment' => $agreedDownPayment,
                 'installments_count' => $isDraft ? 0 : count($regularRows),
-                'first_installment_date' => $isDraft || !$regularRows ? null : $this->firstDate($regularRows),
+                'first_installment_date' => $isDraft || ! $regularRows ? null : $this->firstDate($regularRows),
                 'interval_months' => $data['interval_months'] ?? null,
                 'monthly_rent' => $data['monthly_rent'] ?? null,
                 'duration_months' => $data['duration_months'] ?? null,
@@ -151,7 +153,7 @@ class ContractService
                 'status' => $isDraft ? ContractStatus::DRAFT->value : ContractStatus::ACTIVE->value,
             ]);
 
-            if (!$isDraft) {
+            if (! $isDraft) {
                 $this->writeSchedule($contract, $rows, $actor);
                 $this->completeOperation($contract, $reservation);
             }
@@ -162,7 +164,7 @@ class ContractService
                 entityId: $contract->id,
                 newValues: $this->safeContractArray($contract),
                 isAutomatic: false,
-                reason: ($isDraft ? 'Contract drafted by ' : 'Contract created by ') . $actor->name,
+                reason: ($isDraft ? 'Contract drafted by ' : 'Contract created by ').$actor->name,
             );
 
             return $contract->load('client', 'unit.building', 'reservation', 'installments', 'downPayments');
@@ -191,7 +193,7 @@ class ContractService
             }
 
             $unit = Unit::whereKey($contract->unit_id)->lockForUpdate()->first();
-            if (!$unit) {
+            if (! $unit) {
                 throw ValidationException::withMessages([
                     'unit_id' => __('contracts.unit_not_found'),
                 ]);
@@ -222,11 +224,453 @@ class ContractService
                 newValues: $this->safeContractArray($contract),
                 changedFields: ['status', 'installments_count', 'first_installment_date'],
                 isAutomatic: false,
-                reason: 'Draft posted by ' . $actor->name,
+                reason: 'Draft posted by '.$actor->name,
             );
 
             return $contract->fresh()->load('client', 'unit.building', 'reservation', 'installments', 'downPayments');
         });
+    }
+
+    /**
+     * Edit a contract (owner decision 2026-11-21).
+     *
+     * A **draft** changes anything. An **active** contract may change its data and its money, but only
+     * the rows that never collected a penny are re-planned: an installment with `paid_amount > 0` (or
+     * one that ever carried a payment line) keeps its amount and due date, receipts are never touched,
+     * and the new price may not fall below what was actually collected.
+     */
+    public function update(Contract $contract, array $data, $actor): Contract
+    {
+        if ($contract->isCancelled()) {
+            throw ValidationException::withMessages([
+                'contract' => __('contracts.cannot_edit_cancelled'),
+            ]);
+        }
+
+        return DB::transaction(function () use ($contract, $data, $actor) {
+            $contract = Contract::whereKey($contract->id)->lockForUpdate()->firstOrFail();
+
+            if ($contract->isCancelled()) {
+                throw ValidationException::withMessages([
+                    'contract' => __('contracts.cannot_edit_cancelled'),
+                ]);
+            }
+
+            $oldValues = $this->safeContractArray($contract);
+            $isDraft = $contract->status === ContractStatus::DRAFT;
+            $type = $contract->type->value;
+
+            // The number is generated per type, and the schedule shape depends on it: switching would
+            // silently rewrite the whole deal. Cancel and re-create instead.
+            if (array_key_exists('type', $data) && $data['type'] !== null && $data['type'] !== $type) {
+                throw ValidationException::withMessages([
+                    'type' => __('contracts.cannot_change_type'),
+                ]);
+            }
+
+            $given = fn (string $key) => array_key_exists($key, $data);
+            $value = fn (string $key, $fallback) => $given($key) ? $data[$key] : $fallback;
+
+            $contractDate = $value('contract_date', $contract->contract_date);
+            $totalPrice = round((float) $value('total_price', $contract->total_price), 2);
+            $discount = round((float) $value('discount', $contract->discount), 2);
+            $downPayment = round((float) $value('agreed_down_payment', $contract->agreed_down_payment), 2);
+            $count = (int) $value('installments_count', $contract->installments_count);
+            $interval = $value('interval_months', $contract->interval_months);
+            $firstDate = $value('first_installment_date', $contract->first_installment_date);
+            $monthlyRent = round((float) $value('monthly_rent', $contract->monthly_rent), 2);
+            $duration = (int) $value('duration_months', $contract->duration_months);
+            $startDate = $value('start_date', $contract->start_date);
+            $endDate = $value('end_date', $contract->end_date);
+
+            // A lease total follows its rent × term whenever the caller did not send one explicitly.
+            if ($type === ContractType::RENT->value && ! $given('total_price')
+                && ($given('monthly_rent') || $given('duration_months')) && $monthlyRent > 0 && $duration > 0) {
+                $totalPrice = round($monthlyRent * $duration, 2);
+            }
+
+            // Same for the lease end date.
+            if ($type === ContractType::RENT->value && ! $given('end_date') && ($given('start_date') || $given('duration_months'))) {
+                $endDate = $this->leaseEndDate(['start_date' => $startDate, 'duration_months' => $duration]);
+            }
+
+            // ── Unit ────────────────────────────────────────────────────────────
+            $oldUnitId = (int) $contract->unit_id;
+            $unitId = $given('unit_id') ? (int) $data['unit_id'] : $oldUnitId;
+            $unit = Unit::whereKey($unitId)->lockForUpdate()->first();
+
+            if (! $unit) {
+                throw ValidationException::withMessages([
+                    'unit_id' => __('contracts.unit_not_found'),
+                ]);
+            }
+
+            $this->assertUnitOfferedFor($unit, $type);
+
+            if ($unitId !== $oldUnitId) {
+                if ($unit->reservations()->where('status', ReservationStatus::ACTIVE->value)->exists()) {
+                    throw ValidationException::withMessages([
+                        'unit_id' => __('contracts.unit_has_active_reservation'),
+                    ]);
+                }
+
+                if (Contract::where('unit_id', $unitId)->whereKeyNot($contract->id)
+                    ->whereIn('status', [ContractStatus::ACTIVE->value, ContractStatus::DRAFT->value])->exists()) {
+                    throw ValidationException::withMessages([
+                        'unit_id' => __('contracts.unit_has_active_contract'),
+                    ]);
+                }
+
+                // A contract born from a reservation stays in that reservation's building.
+                $reservation = $contract->reservation;
+                if ($reservation && $reservation->building_id
+                    && (int) $reservation->building_id !== (int) $unit->building_id) {
+                    throw ValidationException::withMessages([
+                        'unit_id' => __('contracts.unit_not_in_reservation_building'),
+                    ]);
+                }
+            }
+
+            // ── Money floors of a posted contract ───────────────────────────────
+            $paidDownPayment = 0.0;
+            if (! $isDraft) {
+                $paidDownPayment = (float) $contract->paid_down_payment;
+                $installmentPaid = (float) $contract->installmentPayments()
+                    ->where('status', PaymentStatus::VALID->value)
+                    ->whereNull('deleted_at')
+                    ->sum('amount');
+                $collected = (float) MoneyCalculator::sumPayments([$paidDownPayment, $installmentPaid]);
+
+                if ($downPayment < $paidDownPayment) {
+                    throw ValidationException::withMessages([
+                        'agreed_down_payment' => __('contracts.down_payment_less_than_paid'),
+                    ]);
+                }
+
+                if ($totalPrice < $collected) {
+                    throw ValidationException::withMessages([
+                        'total_price' => __('contracts.cannot_edit_price_below_deposit'),
+                    ]);
+                }
+            }
+
+            if ($downPayment > $totalPrice) {
+                throw ValidationException::withMessages([
+                    'agreed_down_payment' => __('contracts.down_payment_exceeds_price'),
+                ]);
+            }
+
+            // ── Schedule ────────────────────────────────────────────────────────
+            $rows = array_key_exists('schedule', $data) ? $this->scheduleRows($data['schedule'] ?? []) : null;
+
+            $shapeFields = ['total_price', 'discount', 'agreed_down_payment', 'installments_count',
+                'first_installment_date', 'interval_months', 'monthly_rent', 'duration_months', 'start_date'];
+            $shapeChanged = collect($shapeFields)->contains(fn (string $key) => $given($key));
+
+            $lockedCount = $isDraft ? 0 : $contract->installments()->get()
+                ->filter(fn (Installment $installment) => $this->isScheduleRowLocked($installment))
+                ->count();
+
+            if ($rows === null && $shapeChanged) {
+                // Paid rows sit inside the old schedule; regenerating would not know where, so the
+                // caller has to send the new schedule as a whole.
+                if ($lockedCount > 0) {
+                    throw ValidationException::withMessages([
+                        'schedule' => __('contracts.schedule_required_for_paid_contract'),
+                    ]);
+                }
+
+                $rows = $this->generatedRows([
+                    'total_price' => $totalPrice,
+                    'agreed_down_payment' => $downPayment,
+                    'installments_count' => $count,
+                    'first_installment_date' => $firstDate,
+                    'interval_months' => $interval,
+                    'monthly_rent' => $monthlyRent,
+                    'duration_months' => $duration ?: null,
+                    'start_date' => $startDate,
+                    'contract_date' => $contractDate,
+                ], $type, $totalPrice, $downPayment);
+            }
+
+            $installmentsCount = $isDraft ? 0 : (int) $contract->installments_count;
+            $firstInstallmentDate = $isDraft ? null : $contract->first_installment_date;
+            $draftSchedule = null;
+
+            if ($rows !== null) {
+                if ($isDraft) {
+                    $draftSchedule = array_map(fn (array $row) => [
+                        'due_date' => $row['due_date'],
+                        'amount' => $row['amount'],
+                        'is_down_payment' => $row['is_down_payment'],
+                        'paid_amount' => $row['paid_amount'],
+                    ], $rows);
+                } else {
+                    $planned = $this->replanSchedule($contract, $rows);
+                    $installmentsCount = count($planned);
+                    $firstInstallmentDate = $planned ? min(array_column($planned, 'due_date')) : null;
+                }
+            }
+
+            $fields = [
+                'client_id' => $value('client_id', $contract->client_id),
+                'unit_id' => $unitId,
+                'contract_date' => $contractDate,
+                'total_price' => $totalPrice,
+                'discount' => $discount,
+                'discount_reason' => $value('discount_reason', $contract->discount_reason),
+                'agreed_down_payment' => $downPayment,
+                'installments_count' => $installmentsCount,
+                'first_installment_date' => $firstInstallmentDate,
+                'interval_months' => $interval,
+                'monthly_rent' => $monthlyRent,
+                'duration_months' => $duration ?: null,
+                'start_date' => $startDate,
+                'end_date' => $endDate,
+                'security_deposit' => round((float) $value('security_deposit', $contract->security_deposit), 2),
+                'advance_months' => (int) $value('advance_months', $contract->advance_months),
+                'annual_increase_pct' => $value('annual_increase_pct', $contract->annual_increase_pct),
+                'increase_from_year' => $value('increase_from_year', $contract->increase_from_year),
+                'notes' => $value('notes', $contract->notes),
+            ];
+
+            if ($isDraft && $rows !== null) {
+                $fields['draft_schedule'] = $draftSchedule;
+            }
+
+            Contract::$allowFinancialUpdate = true;
+            try {
+                $contract->update($fields);
+            } finally {
+                Contract::$allowFinancialUpdate = false;
+            }
+
+            // ── Unit statuses follow the contract ───────────────────────────────
+            if (! $isDraft && $unitId !== $oldUnitId) {
+                $oldUnitStillHeld = Contract::where('unit_id', $oldUnitId)->whereKeyNot($contract->id)
+                    ->whereIn('status', [ContractStatus::ACTIVE->value, ContractStatus::DRAFT->value])->exists()
+                    || Reservation::where('unit_id', $oldUnitId)
+                        ->where('status', ReservationStatus::ACTIVE->value)->exists();
+
+                if (! $oldUnitStillHeld) {
+                    Unit::whereKey($oldUnitId)->update(['status' => UnitStatus::AVAILABLE->value]);
+                }
+
+                $unit->update([
+                    'status' => $type === ContractType::SALE->value
+                        ? UnitStatus::SOLD->value
+                        : UnitStatus::RENTED->value,
+                ]);
+            }
+
+            $contract = $contract->fresh();
+            $newValues = $this->safeContractArray($contract);
+
+            $this->audit->log(
+                action: AuditAction::UPDATE->value,
+                entityType: 'contracts',
+                entityId: $contract->id,
+                oldValues: $oldValues,
+                newValues: $newValues,
+                changedFields: array_keys(array_filter(
+                    $newValues,
+                    fn ($value, $key) => ($oldValues[$key] ?? null) != $value,
+                    ARRAY_FILTER_USE_BOTH
+                )),
+                isAutomatic: false,
+                reason: 'Contract edited by '.$actor->name,
+            );
+
+            return $contract->load(
+                'client',
+                'unit.building',
+                'reservation',
+                'installments',
+                'downPayments',
+                'installmentPayments'
+            );
+        });
+    }
+
+    /** Caller rows for an edit: like explicitRows(), but it remembers which installment it carries. */
+    private function scheduleRows(array $rows): array
+    {
+        return collect($rows)
+            ->filter(fn ($row) => ! empty($row['due_date']) && (float) ($row['amount'] ?? 0) > 0)
+            ->map(fn ($row) => [
+                'installment_id' => ! empty($row['installment_id']) ? (int) $row['installment_id'] : null,
+                'due_date' => Carbon::parse($row['due_date'])->toDateString(),
+                'amount' => round((float) $row['amount'], 2),
+                'is_down_payment' => (bool) ($row['is_down_payment'] ?? false),
+                'paid_amount' => round((float) ($row['paid_amount'] ?? 0), 2),
+            ])
+            ->values()
+            ->all();
+    }
+
+    /**
+     * Re-plan a posted schedule around the rows that already hold money.
+     *
+     * A row is locked when it collected something (`paid_amount > 0`). Locked rows keep their amount
+     * and due date; the sent rows only re-plan the free ones. A free row missing from the new schedule
+     * is deleted, just as a fresh schedule would never have created it — unless a (cancelled) payment
+     * line still points at it.
+     *
+     * @return array<int, array{due_date: string, amount: float}> the final schedule
+     */
+    private function replanSchedule(Contract $contract, array $rows): array
+    {
+        $existing = $contract->installments()->orderBy('sequence_number')->get()->keyBy('id');
+        $locked = [];
+        $open = [];
+
+        foreach ($existing as $id => $installment) {
+            if ($this->isScheduleRowLocked($installment)) {
+                $locked[$id] = $installment;
+            } else {
+                $open[$id] = $installment;
+            }
+        }
+
+        $final = [];
+        $seen = [];
+
+        foreach ($rows as $row) {
+            $id = $row['installment_id'];
+
+            // The same existing row twice would move one installment while counting two.
+            if ($id !== null && isset($seen[$id])) {
+                continue;
+            }
+
+            // A paid row never moves, whatever the caller sent for it.
+            if ($id !== null && isset($locked[$id])) {
+                $seen[$id] = true;
+                $final[] = [
+                    'installment' => $locked[$id],
+                    'due_date' => $locked[$id]->due_date->toDateString(),
+                    'amount' => (float) $locked[$id]->amount,
+                ];
+
+                continue;
+            }
+
+            if ($id !== null && isset($open[$id])) {
+                $seen[$id] = true;
+            }
+
+            $final[] = [
+                'installment' => $id !== null ? ($open[$id] ?? null) : null,
+                'due_date' => $row['due_date'],
+                'amount' => round((float) $row['amount'], 2),
+            ];
+        }
+
+        // Paid rows the caller left out stay exactly where they are.
+        foreach ($locked as $id => $installment) {
+            if (! isset($seen[$id])) {
+                $final[] = [
+                    'installment' => $installment,
+                    'due_date' => $installment->due_date->toDateString(),
+                    'amount' => (float) $installment->amount,
+                ];
+            }
+        }
+
+        // Free rows dropped from the schedule go away — unless a payment line points at them.
+        foreach ($open as $id => $installment) {
+            if (isset($seen[$id])) {
+                continue;
+            }
+
+            if ($installment->payments()->exists()) {
+                throw ValidationException::withMessages([
+                    'schedule' => __('contracts.schedule_shrink_blocked'),
+                ]);
+            }
+
+            $installment->delete();
+        }
+
+        // Sequence follows the due date, so the statement still reads like a calendar.
+        usort($final, fn (array $a, array $b) => [
+            $a['due_date'], $a['installment']?->id ?? PHP_INT_MAX,
+        ] <=> [
+            $b['due_date'], $b['installment']?->id ?? PHP_INT_MAX,
+        ]);
+
+        $sequence = 0;
+        $result = [];
+
+        foreach ($final as $row) {
+            $sequence++;
+            $installment = $row['installment'];
+            $dueDate = $row['due_date'];
+            $amount = round((float) $row['amount'], 2);
+            $result[] = ['due_date' => $dueDate, 'amount' => $amount];
+
+            if (! $installment) {
+                Installment::create([
+                    'contract_id' => $contract->id,
+                    'sequence_number' => $sequence,
+                    'due_date' => $dueDate,
+                    'amount' => $amount,
+                    'paid_amount' => 0,
+                    'remaining' => $amount,
+                    'status' => InstallmentStatus::DUE->value,
+                ]);
+
+                continue;
+            }
+
+            $changes = [];
+
+            if ($installment->sequence_number !== $sequence) {
+                $changes['sequence_number'] = $sequence;
+            }
+
+            if (! $this->isScheduleRowLocked($installment)) {
+                if ($installment->due_date->toDateString() !== $dueDate) {
+                    $changes['due_date'] = $dueDate;
+                }
+
+                if (abs((float) $installment->amount - $amount) >= 0.005) {
+                    $changes['amount'] = $amount;
+                    $changes['remaining'] = round($amount - (float) $installment->paid_amount, 2);
+                    $changes['status'] = $installment->isCancelled()
+                        ? InstallmentStatus::CANCELLED->value
+                        : InstallmentStatus::DUE->value;
+                }
+            }
+
+            if ($changes) {
+                $installment->update($changes);
+            }
+        }
+
+        $this->audit->log(
+            action: AuditAction::UPDATE->value,
+            entityType: 'contracts',
+            entityId: $contract->id,
+            newValues: [
+                'installments_count' => count($result),
+                'total_amount' => round(array_sum(array_column($result, 'amount')), 2),
+            ],
+            isAutomatic: true,
+            reason: 'Installments re-planned for contract #'.$contract->number,
+        );
+
+        return $result;
+    }
+
+    /**
+     * A row is frozen once it collected money. A row that only carries cancelled payment lines has
+     * `paid_amount = 0` and may still be re-planned — but it can never be dropped, because that
+     * history points at it (see replanSchedule()).
+     */
+    private function isScheduleRowLocked(Installment $installment): bool
+    {
+        return (float) $installment->paid_amount > 0;
     }
 
     /**
@@ -237,19 +681,19 @@ class ContractService
     {
         $isSale = $type === ContractType::SALE->value;
 
-        if (!$unit->is_sellable) {
+        if (! $unit->is_sellable) {
             throw ValidationException::withMessages([
                 'unit_id' => __('units.not_available'),
             ]);
         }
 
-        if ($isSale && !$unit->offersSale()) {
+        if ($isSale && ! $unit->offersSale()) {
             throw ValidationException::withMessages([
                 'unit_id' => __('units.purpose_rent_only'),
             ]);
         }
 
-        if (!$isSale && !$unit->offersRent()) {
+        if (! $isSale && ! $unit->offersRent()) {
             throw ValidationException::withMessages([
                 'unit_id' => __('units.purpose_sale_only'),
             ]);
@@ -260,9 +704,9 @@ class ContractService
     private function explicitRows(array $data): array
     {
         return collect($data['schedule'] ?? [])
-            ->filter(fn ($row) => !empty($row['due_date']) && (float) ($row['amount'] ?? 0) > 0)
+            ->filter(fn ($row) => ! empty($row['due_date']) && (float) ($row['amount'] ?? 0) > 0)
             ->map(fn ($row) => [
-                'due_date' => \Carbon\Carbon::parse($row['due_date'])->toDateString(),
+                'due_date' => Carbon::parse($row['due_date'])->toDateString(),
                 'amount' => round((float) $row['amount'], 2),
                 'is_down_payment' => (bool) ($row['is_down_payment'] ?? false),
                 'paid_amount' => round((float) ($row['paid_amount'] ?? 0), 2),
@@ -348,7 +792,7 @@ class ContractService
                 round($totalPrice - $downPayment, 2),
                 $count,
                 (int) $data['interval_months'],
-                \Carbon\Carbon::parse($data['first_installment_date'])
+                Carbon::parse($data['first_installment_date'])
             );
         }
 
@@ -358,7 +802,7 @@ class ContractService
             return $this->monthlyRentRows(
                 $rent,
                 $months,
-                \Carbon\Carbon::parse($data['start_date'] ?? $data['contract_date'])
+                Carbon::parse($data['start_date'] ?? $data['contract_date'])
             );
         }
 
@@ -366,7 +810,7 @@ class ContractService
     }
 
     /** Equal amounts, the last one absorbs the rounding. */
-    private function equalRows(float $remainder, int $count, int $interval, \Carbon\Carbon $startDate): array
+    private function equalRows(float $remainder, int $count, int $interval, Carbon $startDate): array
     {
         $base = floor(($remainder / max(1, $count)) * 100) / 100;
         $rows = [];
@@ -389,7 +833,7 @@ class ContractService
     }
 
     /** One row per lease month, starting on the start date. */
-    private function monthlyRentRows(float $rent, int $months, \Carbon\Carbon $startDate): array
+    private function monthlyRentRows(float $rent, int $months, Carbon $startDate): array
     {
         $rows = [];
         for ($i = 0; $i < $months; $i++) {
@@ -405,7 +849,7 @@ class ContractService
     }
 
     /** Month-end handling: if the start day doesn't exist in a later month, use the last day of that month. */
-    private function addMonthsClamped(\Carbon\Carbon $start, int $months): \Carbon\Carbon
+    private function addMonthsClamped(Carbon $start, int $months): Carbon
     {
         $dueDate = $start->copy()->addMonthsNoOverflow($months);
 
@@ -419,7 +863,7 @@ class ContractService
             return null;
         }
 
-        return $this->addMonthsClamped(\Carbon\Carbon::parse($data['start_date']), $months - 1)->toDateString();
+        return $this->addMonthsClamped(Carbon::parse($data['start_date']), $months - 1)->toDateString();
     }
 
     /**
@@ -434,7 +878,7 @@ class ContractService
         foreach ($rows as $row) {
             $amount = round((float) $row['amount'], 2);
 
-            if (!empty($row['is_down_payment'])) {
+            if (! empty($row['is_down_payment'])) {
                 if (($row['paid_amount'] ?? 0) > 0) {
                     ContractDownPayment::create([
                         'contract_id' => $contract->id,
@@ -445,6 +889,7 @@ class ContractService
                         'created_by' => $actor->id,
                     ]);
                 }
+
                 continue;
             }
 
@@ -478,7 +923,7 @@ class ContractService
                     'total_amount' => round(array_sum(array_column($this->regularRows($rows), 'amount')), 2),
                 ],
                 isAutomatic: true,
-                reason: 'Installments generated for contract #' . $contract->number,
+                reason: 'Installments generated for contract #'.$contract->number,
             );
         }
     }
@@ -505,11 +950,11 @@ class ContractService
      */
     private function generateContractNumber(string $type, string $date): string
     {
-        $year = \Carbon\Carbon::parse($date)->year;
-        $prefix = $year . '-';
+        $year = Carbon::parse($date)->year;
+        $prefix = $year.'-';
 
-        return DB::transaction(function () use ($prefix, $year) {
-            $max = Contract::where('number', 'like', $prefix . '%')
+        return DB::transaction(function () use ($prefix) {
+            $max = Contract::where('number', 'like', $prefix.'%')
                 ->lockForUpdate()
                 ->max('number');
 
@@ -518,19 +963,19 @@ class ContractService
                 $next = (int) substr($max, strlen($prefix)) + 1;
             }
 
-            return $prefix . str_pad($next, 4, '0', STR_PAD_LEFT);
+            return $prefix.str_pad($next, 4, '0', STR_PAD_LEFT);
         });
     }
 
     public function cancel(Contract $contract, string $reason, $actor): Contract
     {
-        if (!$contract->isActive() && $contract->status !== ContractStatus::DRAFT) {
+        if (! $contract->isActive() && $contract->status !== ContractStatus::DRAFT) {
             throw ValidationException::withMessages([
                 'contract' => __('contracts.cannot_cancel_non_active'),
             ]);
         }
 
-        return DB::transaction(function () use ($contract, $reason, $actor) {
+        return DB::transaction(function () use ($contract, $reason) {
             $wasDraft = $contract->status === ContractStatus::DRAFT;
             $oldValues = $this->safeContractArray($contract);
 
@@ -544,7 +989,7 @@ class ContractService
             $contract->installments()->update(['status' => InstallmentStatus::CANCELLED->value]);
 
             // A draft never touched the unit; an active contract frees it.
-            if (!$wasDraft) {
+            if (! $wasDraft) {
                 $unit = Unit::find($contract->unit_id);
                 $unit?->update(['status' => UnitStatus::AVAILABLE]);
             }
@@ -558,7 +1003,7 @@ class ContractService
                 oldValues: $oldValues,
                 newValues: $this->safeContractArray($contract),
                 changedFields: ['status', 'cancelled_at', 'cancellation_reason'],
-                reason: 'Contract cancelled: ' . $reason,
+                reason: 'Contract cancelled: '.$reason,
             );
 
             return $contract->fresh();

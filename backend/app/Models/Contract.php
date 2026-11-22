@@ -4,7 +4,7 @@ namespace App\Models;
 
 use App\Enums\ContractStatus;
 use App\Enums\ContractType;
-use App\Support\Money\DecimalCast;
+use App\Support\Money\MoneyCalculator;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -116,6 +116,13 @@ class Contract extends Model
     }
 
     /**
+     * Set by `ContractService::update()` only: the service has already re-planned the schedule around
+     * the rows that collected money, so the immutability guard below may let the financial fields
+     * through. Everything else keeps the contract financially frozen.
+     */
+    public static bool $allowFinancialUpdate = false;
+
+    /**
      * One reservation -> at most one contract (drafts included; a cancelled one frees it again).
      */
     public static function boot()
@@ -135,6 +142,10 @@ class Contract extends Model
 
         // Financial fields are immutable once the contract is posted; a draft may still change its schedule.
         static::updating(function (Contract $contract) {
+            if (static::$allowFinancialUpdate) {
+                return;
+            }
+
             if ($contract->getOriginal('status') === ContractStatus::DRAFT->value) {
                 return;
             }
@@ -145,8 +156,8 @@ class Contract extends Model
                 'duration_months', 'start_date', 'end_date', 'security_deposit', 'advance_months',
                 'annual_increase_pct', 'increase_from_year'];
             $dirtyImmutable = array_intersect($contract->getDirty(), $immutableFields);
-            if (!empty($dirtyImmutable)) {
-                throw new \RuntimeException('Financial fields are immutable: ' . implode(', ', $dirtyImmutable));
+            if (! empty($dirtyImmutable)) {
+                throw new \RuntimeException('Financial fields are immutable: '.implode(', ', $dirtyImmutable));
             }
         });
     }
@@ -176,12 +187,12 @@ class Contract extends Model
                 ->pluck('amount')
                 ->all();
 
-        return \App\Support\Money\MoneyCalculator::sumPayments(array_merge([$reservationPayments], $contractPayments));
+        return MoneyCalculator::sumPayments(array_merge([$reservationPayments], $contractPayments));
     }
 
     public function getRemainingDownPaymentAttribute(): string
     {
-        return \App\Support\Money\MoneyCalculator::remaining(
+        return MoneyCalculator::remaining(
             $this->agreed_down_payment,
             $this->paid_down_payment
         );
@@ -198,7 +209,7 @@ class Contract extends Model
             ->whereNull('deleted_at')
             ->sum('amount');
 
-        return \App\Support\Money\MoneyCalculator::sumPayments([
+        return MoneyCalculator::sumPayments([
             $downPaymentPaid,
             $installmentPaid,
         ]);

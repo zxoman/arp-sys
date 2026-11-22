@@ -26,6 +26,7 @@ import {
   fetchReservation,
   fetchReservationPayments,
   fetchReservations,
+  updateReservation,
   type ApiBuilding,
   type ApiClient,
   type ApiReservation,
@@ -46,6 +47,7 @@ import {
   IconBtn,
   IconCalendar,
   IconEye,
+  IconPencil,
   IconPlus,
   IconTrash,
   Modal,
@@ -331,7 +333,7 @@ export default function Reservations() {
   const [optionsReadyKey, setOptionsReadyKey] = useState<number | null>(null)
 
   // ── Drawer state ────────────────────────────────────────────────────────
-  const [mode, setMode] = useState<'new' | 'view' | null>(null)
+  const [mode, setMode] = useState<'new' | 'edit' | 'view' | null>(null)
   const [current, setCurrent] = useState<ApiReservation | null>(null)
   const [payments, setPayments] = useState<ApiReservationPayment[]>([])
   const [paymentsLoading, setPaymentsLoading] = useState(false)
@@ -439,6 +441,20 @@ export default function Reservations() {
     void refreshDetail(r.id)
   }
 
+  /** Edit an active reservation: client, unit/building and date. Payments are not edited here. */
+  const openEdit = (r: ApiReservation) => {
+    setCurrent(r)
+    setDraft({
+      clientId: String(r.client_id),
+      unitId: r.unit_id != null ? String(r.unit_id) : null,
+      buildingId: r.building_id != null ? String(r.building_id) : null,
+      date: (r.reservation_date ?? isoToday()).slice(0, 10) as ISODate,
+      firstPayment: null,
+    })
+    setErrors({})
+    setMode('edit')
+  }
+
   const refreshDetail = async (id: number) => {
     setPaymentsLoading(true)
     try {
@@ -500,13 +516,24 @@ export default function Reservations() {
     }
     setSaving(true)
     try {
-      const reservation = await createReservation(input)
-      toast.success(
-        'تم إنشاء الحجز',
-        `${reservation.client_name ?? ''} — ${codeOf(`r-${reservation.id}`)}` +
-          (reservation.unit_name ? ` · الوحدة ${reservation.unit_name} أصبحت «محجوزة»` : ''),
-      )
-      setMode(null)
+      if (mode === 'edit' && current) {
+        const reservation = await updateReservation(current.id, input)
+        toast.success(
+          'تم تعديل الحجز',
+          `${reservation.client_name ?? ''} — ${codeOf(`r-${reservation.id}`)}` +
+            (reservation.unit_name ? ` · الوحدة ${reservation.unit_name}` : ''),
+        )
+        setMode(null)
+        setCurrent(null)
+      } else {
+        const reservation = await createReservation(input)
+        toast.success(
+          'تم إنشاء الحجز',
+          `${reservation.client_name ?? ''} — ${codeOf(`r-${reservation.id}`)}` +
+            (reservation.unit_name ? ` · الوحدة ${reservation.unit_name} أصبحت «محجوزة»` : ''),
+        )
+        setMode(null)
+      }
       setPage(0)
       reload()
       setOptionsKey((k) => k + 1)
@@ -587,17 +614,25 @@ export default function Reservations() {
     [clients],
   )
 
-  const unitOptions = useMemo(
-    () =>
-      units.map((u) => ({
-        value: String(u.id),
-        label: `${u.building_name ?? ''} — ${u.name}`,
-        description: [u.type_label, u.area ? `${Number(u.area).toLocaleString('ar-EG')} م²` : null, u.total_price ? fmtMoney(Number(u.total_price)) : null]
-          .filter(Boolean)
-          .join(' · '),
-      })),
-    [units],
-  )
+  const unitOptions = useMemo(() => {
+    const options = units.map((u) => ({
+      value: String(u.id),
+      label: `${u.building_name ?? ''} — ${u.name}`,
+      description: [u.type_label, u.area ? `${Number(u.area).toLocaleString('ar-EG')} م²` : null, u.total_price ? fmtMoney(Number(u.total_price)) : null]
+        .filter(Boolean)
+        .join(' · '),
+    }))
+    // The unit being edited is «محجوزة», so the available-only list no longer contains it.
+    const editingUnitId = mode === 'edit' && current?.unit_id != null ? String(current.unit_id) : null
+    if (editingUnitId && !options.some((o) => o.value === editingUnitId)) {
+      options.unshift({
+        value: editingUnitId,
+        label: `${current?.building_name ?? ''} — ${current?.unit_name ?? editingUnitId}`,
+        description: 'الوحدة الحالية',
+      })
+    }
+    return options
+  }, [units, mode, current])
 
   const buildingOptions = useMemo(
     () =>
@@ -724,11 +759,14 @@ export default function Reservations() {
         }}
         searchPlaceholder="ابحث باسم العميل أو الوحدة أو المبنى…"
         exportName="الحجوزات"
-        actionsWidth="8rem"
+        actionsWidth="10rem"
         onRowClick={openRecord}
         actions={(r) => (
           <div className="flex items-center gap-0.5">
             <IconBtn size="sm" icon={<IconEye size={16} />} label="عرض" onClick={() => openRecord(r)} />
+            {r.status === 'active' && (
+              <IconBtn size="sm" icon={<IconPencil size={16} />} label="تعديل الحجز" onClick={() => openEdit(r)} />
+            )}
             {r.status === 'active' && (
               <IconBtn
                 size="sm"
@@ -747,21 +785,25 @@ export default function Reservations() {
         emptyText={notLoaded ? 'لا توجد بيانات من الخادم.' : 'لا توجد حجوزات. ابدأ بحجز جديد.'}
       />
 
-      {/* ── New reservation ─────────────────────────────────────────────── */}
+      {/* ── New / edit reservation ──────────────────────────────────────── */}
       <Drawer
-        open={mode === 'new'}
+        open={mode === 'new' || mode === 'edit'}
         onClose={() => !saving && setMode(null)}
         size="lg"
-        icon={<IconCalendar size={20} />}
-        title="حجز جديد"
-        description="الحجز يربط عميلًا بوحدة (أو بمبنى)؛ لا سعر في الحجز والسعر يُتفق عليه في العقد."
+        icon={mode === 'edit' ? <IconPencil size={20} /> : <IconCalendar size={20} />}
+        title={mode === 'edit' ? 'تعديل الحجز' : 'حجز جديد'}
+        description={
+          mode === 'edit'
+            ? 'يمكن تعديل العميل والوحدة أو المبنى وتاريخ الحجز. الدفعات تُدار من تفاصيل الحجز.'
+            : 'الحجز يربط عميلًا بوحدة (أو بمبنى)؛ لا سعر في الحجز والسعر يُتفق عليه في العقد.'
+        }
         footer={
           <>
             <Btn variant="ghost" onClick={() => setMode(null)} disabled={saving}>
               إلغاء
             </Btn>
             <Btn type="submit" form="reservation-form" loading={saving}>
-              حفظ
+              {mode === 'edit' ? 'حفظ التعديل' : 'حفظ'}
             </Btn>
           </>
         }
@@ -792,7 +834,13 @@ export default function Reservations() {
               label="الوحدة"
               placeholder="ابحث بالمبنى أو اسم الوحدة…"
               emptyText="لا توجد وحدات متاحة وقابلة للبيع"
-              hint={errors.unitId ? undefined : 'تُعرض الوحدات المتاحة والقابلة للبيع فقط.'}
+              hint={
+                errors.unitId
+                  ? undefined
+                  : mode === 'edit'
+                    ? 'الوحدة الحالية أو وحدة متاحة أخرى؛ تغييرها يحرّر الوحدة القديمة.'
+                    : 'تُعرض الوحدات المتاحة والقابلة للبيع فقط.'
+              }
               options={unitOptions}
               value={draft.unitId}
               error={errors.unitId}
@@ -822,17 +870,21 @@ export default function Reservations() {
               today={isoToday()}
               onChange={(v) => update({ date: v ?? isoToday() })}
             />
-            <NumericInput
-              label="دفعة أولى (اختياري)"
-              suffix="ج.م"
-              min={0}
-              decimals={2}
-              value={draft.firstPayment}
-              error={errors.firstPayment}
-              onChange={(v) => update({ firstPayment: v })}
-            />
+            {mode === 'new' && (
+              <NumericInput
+                label="دفعة أولى (اختياري)"
+                suffix="ج.م"
+                min={0}
+                decimals={2}
+                value={draft.firstPayment}
+                error={errors.firstPayment}
+                onChange={(v) => update({ firstPayment: v })}
+              />
+            )}
             <Text variant="caption" className="col-span-full text-fg-3">
-              لا يوجد سعر للحجز: المقدم يُسجَّل كدفعة يمكن إلغاؤها، وباقي الدفعات تُضاف من التفاصيل.
+              {mode === 'edit'
+                ? 'دفعات الحجز (المقدم) تُسجَّل وتُلغى من تفاصيل الحجز، ولا تُعدَّل هنا.'
+                : 'لا يوجد سعر للحجز: المقدم يُسجَّل كدفعة يمكن إلغاؤها، وباقي الدفعات تُضاف من التفاصيل.'}
             </Text>
           </FormGrid>
         </form>
@@ -851,6 +903,15 @@ export default function Reservations() {
             <Btn variant="ghost" onClick={() => setMode(null)}>
               إغلاق
             </Btn>
+            {current?.status === 'active' && (
+              <Btn
+                variant="ghost"
+                iconStart={<IconPencil size={16} />}
+                onClick={() => openEdit(current)}
+              >
+                تعديل
+              </Btn>
+            )}
             {current?.status === 'active' && (
               <Btn
                 variant="danger"

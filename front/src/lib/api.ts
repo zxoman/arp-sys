@@ -828,6 +828,25 @@ export async function createReservation(input: ReservationInput): Promise<ApiRes
   return res.data
 }
 
+/**
+ * `PUT /admin/reservations/{id}` — edits an ACTIVE reservation: client, unit/building and date.
+ * A unit swap frees the old unit and reserves the new one; payments are not touched here.
+ */
+export async function updateReservation(apiId: number, input: ReservationInput): Promise<ApiReservation> {
+  const res = await request<ApiReservation>(`/admin/reservations/${apiId}`, {
+    method: 'PUT',
+    body: JSON.stringify({
+      client_id: input.clientId,
+      // Both keys are always sent: the API keeps the current value when a key is missing, and an
+      // empty `unit_id` with a building is how a reservation becomes a building-level one.
+      unit_id: input.unitId ?? null,
+      building_id: input.buildingId ?? null,
+      reservation_date: input.date,
+    }),
+  })
+  return res.data
+}
+
 /** `POST /admin/reservations/{id}/cancel` — the reason is required; the unit returns to `available`. */
 export async function cancelReservation(apiId: number, reason: string): Promise<ApiReservation> {
   const res = await request<ApiReservation>(`/admin/reservations/${apiId}/cancel`, {
@@ -924,6 +943,8 @@ export interface ApiContractInstallment {
 export interface ContractScheduleInput {
   due_date: string
   amount: number
+  /** Existing row, when editing: it is updated in place instead of being re-created. */
+  installment_id?: number
   /** A down-payment row: kept in the printed schedule, not an installment. */
   is_down_payment?: boolean
   /** Collected at signing; becomes a payment dated on the contract date. */
@@ -1011,18 +1032,24 @@ export interface ContractInput {
   notes?: string
 }
 
-const contractBody = (input: ContractInput): Record<string, unknown> => {
+const contractBody = (input: ContractInput, edit = false): Record<string, unknown> => {
   const body: Record<string, unknown> = {
     type: input.type,
     client_id: input.clientId,
     unit_id: input.unitId,
     contract_date: input.date,
-    status: input.status ?? 'active',
     notes: input.notes ?? null,
   }
-  if (input.reservationId != null) body.reservation_id = input.reservationId
+  if (!edit) {
+    body.status = input.status ?? 'active'
+    if (input.reservationId != null) body.reservation_id = input.reservationId
+  }
   if (input.totalPrice != null) body.total_price = input.totalPrice
-  if (input.discount != null && input.discount > 0) {
+  if (edit) {
+    // An edit sends the discount even when it is zero, so clearing it really clears it.
+    body.discount = input.discount ?? 0
+    body.discount_reason = input.discountReason || null
+  } else if (input.discount != null && input.discount > 0) {
     body.discount = input.discount
     body.discount_reason = input.discountReason || null
   }
@@ -1096,6 +1123,19 @@ export async function createContract(input: ContractInput): Promise<ApiContract>
   return res.data
 }
 
+/**
+ * `PUT /admin/contracts/{id}` — edits a draft freely, and a posted contract without touching the
+ * rows that already collected money: paid installments keep their amount and date, receipts never
+ * move, and the price may not fall below what was collected. The type cannot change.
+ */
+export async function updateContract(apiId: number, input: ContractInput): Promise<ApiContract> {
+  const res = await request<ApiContract>(`/admin/contracts/${apiId}`, {
+    method: 'PUT',
+    body: JSON.stringify(contractBody(input, true)),
+  })
+  return res.data
+}
+
 /** `POST /admin/contracts/{id}/post` — turns a draft into an active contract and writes its schedule. */
 export async function postContract(
   apiId: number,
@@ -1121,6 +1161,8 @@ export async function cancelContract(apiId: number, reason: string): Promise<Api
 export const API_CONTRACT_FIELD_TO_FORM: Record<string, string> = {
   type: 'type',
   reservation_id: 'reservationId',
+  client_id: 'clientId',
+  unit_id: 'unitId',
   contract_date: 'date',
   total_price: 'unitPrice',
   discount: 'discount',

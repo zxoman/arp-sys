@@ -19,4 +19,10 @@ return [
     'price_required_for_sale' => 'A sale contract needs a price (or a schedule with amounts).',
     'rent_total_required' => 'A rent contract needs a total, a schedule, or a monthly rent and term.',
     'not_a_draft' => 'This contract is not a draft, it cannot be posted again.',
+    'cannot_edit_cancelled' => 'A cancelled contract cannot be edited.',
+    'cannot_change_type' => 'The contract type cannot change after creation. Cancel it and create a new one.',
+    'down_payment_less_than_paid' => 'The agreed down payment cannot fall below what was already collected.',
+    'unit_has_active_contract' => 'The unit already has an active or drafted contract.',
+    'schedule_shrink_blocked' => 'An installment with payment lines (even cancelled ones) cannot be removed.',
+    'schedule_required_for_paid_contract' => 'This contract has paid installments: send the full new schedule to re-plan only the unpaid part.',
 ];

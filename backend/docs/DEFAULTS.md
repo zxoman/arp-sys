@@ -74,6 +74,30 @@ Rule: if a real business rule is missing from the BRIEF, ask — do not add it h
     `InstallmentStatus::cancelled`); they are no longer collectable and are excluded from "expected"
     figures in the daily inventory report. They also never count as overdue.
 
+- **Editing a deal (owner decision 2026-11-21):** both screens can edit an existing deal.
+  - **Reservation** (`PUT /admin/reservations/{id}`, permission `reservations.update`): only an `active`
+    reservation — client, unit or building, and `reservation_date`. A unit swap frees the old unit
+    (`available`, unless something else still holds it) and reserves the new one; the new unit must be
+    available, sellable and fit the building/activity. Converted/cancelled reservations are locked
+    (`reservations.cannot_edit_non_active`). Payments are not edited here.
+  - **Contract** (`PUT /admin/contracts/{id}`, permission `contracts.update`): a `draft` changes anything;
+    an `active` contract may change its data **and its money**. The schedule is re-planned only over rows
+    with `paid_amount = 0`: a row that collected money keeps its amount and due date, receipts never move,
+    and a row with only cancelled payment lines cannot be dropped (`contracts.schedule_shrink_blocked`).
+    The agreed down payment may not fall below the collected down payment
+    (`contracts.down_payment_less_than_paid`) and the total may not fall below the money already collected
+    (`contracts.cannot_edit_price_below_deposit`). With paid rows present, changing money/term fields
+    requires an explicit `schedule[]` (`contracts.schedule_required_for_paid_contract`), where existing rows
+    carry `installment_id`. The type cannot change (`contracts.cannot_change_type`) and a cancelled contract
+    is locked (`contracts.cannot_edit_cancelled`). A unit swap must stay inside the original reservation's
+    building (`contracts.unit_not_in_reservation_building`) and target a unit with no active reservation and
+    no other live contract (`contracts.unit_has_active_contract`). `Contract::$allowFinancialUpdate` is set
+    only inside `ContractService::update`, so the model's financial-immutability guard still blocks any
+    other write.
+  - Front: «تعديل» on an active reservation (row + details) and on a draft/active contract (row + details).
+    The contract form shows the stored paid amount read-only, disables paid rows, hides «إضافة مقدم» and
+    disables «توزيع» while paid rows exist.
+
 - **Receipts / collection page (2026-10-29, unconfirmed):** one receipt (إيصال قبض) is ONE collection act
   with one number (`R-YYYY-NNNNN`, per year), one date, one payment method, one reference and one total,
   covering **several installment payments** and **optionally part of the down payment**.

@@ -27,6 +27,7 @@ import {
   fetchReservations,
   fetchUnit,
   postContract,
+  updateContract,
   type ApiClient,
   type ApiContract,
   type ApiReservation,
@@ -53,6 +54,7 @@ import {
   IconEye,
   IconFile,
   IconLayers,
+  IconPencil,
   IconPlus,
   IconTrash,
   IconWallet,
@@ -191,7 +193,17 @@ const unitLabelFor = (unit: ApiUnit | null, reservation: ApiReservation | null):
 
 /* ---------- form model ---------- */
 
-type ScheduleRow = { key: number; dueDate: ISODate | null; amount: number | null; paid?: number | null; isDownPayment?: boolean }
+type ScheduleRow = {
+  key: number
+  dueDate: ISODate | null
+  amount: number | null
+  paid?: number | null
+  isDownPayment?: boolean
+  /** Existing posted installment this row came from; sent back so the server updates it in place. */
+  installmentId?: number
+  /** A posted row that already collected money: its amount and date never change. */
+  locked?: boolean
+}
 
 type Draft = {
   type: ContractType
@@ -255,6 +267,53 @@ const emptyDraft = (type: ContractType = 'بيع'): Draft => ({
   distFirst: null,
   schedule: [],
 })
+
+/** The form draft built from an existing contract (edit mode). */
+function draftFromApi(c: ApiContract): Draft {
+  const lease = c.type === 'rent'
+  const total = money(c.total_price)
+  const disc = money(c.discount)
+
+  // A draft keeps its rows in `draft_schedule`; a posted contract keeps them as installments.
+  // A paid row (`paid_amount > 0`) is locked: the server forces its amount and date back.
+  const rows: ScheduleRow[] = c.status === 'draft'
+    ? (c.draft_schedule ?? []).map((r) => ({
+        ...newRow(day(r.due_date), Number(r.amount)),
+        ...(r.is_down_payment && { isDownPayment: true }),
+        paid: r.paid_amount ?? null,
+      }))
+    : [...(c.installments ?? [])]
+        .sort((a, b) => a.sequence_number - b.sequence_number)
+        .map((i) => {
+          const paid = money(i.paid_amount)
+          return { ...newRow(day(i.due_date), money(i.amount)), paid, installmentId: i.id, locked: paid > 0 }
+        })
+
+  return {
+    type: lease ? 'إيجار' : 'بيع',
+    reservationId: null,
+    clientId: String(c.client_id),
+    unitId: String(c.unit_id),
+    date: day(c.contract_date),
+    notes: c.notes ?? '',
+    // `total_price` is stored net of the discount; the form works with the list price.
+    unitPrice: lease ? null : total + disc,
+    discount: lease ? null : disc || null,
+    discountReason: c.discount_reason ?? '',
+    downPayment: lease ? null : money(c.agreed_down_payment),
+    monthlyRent: lease ? money(c.monthly_rent) : null,
+    durationMonths: lease ? (c.duration_months ?? 12) : 12,
+    startDate: lease ? day(c.start_date) : TODAY_ISO,
+    securityDeposit: lease ? money(c.security_deposit) : null,
+    advanceMonths: lease ? c.advance_months : 0,
+    annualIncreasePct: lease ? money(c.annual_increase_pct) : 10,
+    increaseFromYear: lease ? (c.increase_from_year ?? 2) : 2,
+    distCount: null,
+    distInterval: 1,
+    distFirst: null,
+    schedule: rows,
+  }
+}
 
 /** Rent due over the contract months `[from, to)`, applying the yearly increase month by month. */
 function rentOverMonths(
@@ -321,6 +380,9 @@ export default function Contracts() {
   const [view, setView] = useState<'list' | 'form' | 'details'>('list')
   const [formKey, setFormKey] = useState(0)
   const [detailsId, setDetailsId] = useState<number | null>(null)
+  /** The contract being edited; `null` means the form is creating a new one. */
+  const [editContract, setEditContract] = useState<ApiContract | null>(null)
+  const [editLoadingId, setEditLoadingId] = useState<number | null>(null)
 
   // Debounce typing so the API isn't hit on every keystroke.
   useEffect(() => {
@@ -375,10 +437,27 @@ export default function Contracts() {
   }, [])
 
   const openNew = () => {
+    setEditContract(null)
     setFormKey((k) => k + 1)
     setView('form')
   }
   useNewShortcut(() => view === 'list' && openNew())
+
+  /** Edit needs the whole contract (installments, draft schedule), so it is re-read before the form. */
+  const openEdit = async (c: ApiContract) => {
+    setEditLoadingId(c.id)
+    try {
+      const full = await fetchContract(c.id)
+      setEditContract(full)
+      setFormKey((k) => k + 1)
+      setView('form')
+    } catch (err) {
+      if (isAuthError(err)) return lostSession('انتهت الجلسة أو التوكن غير صالح. سجّل الدخول من جديد.')
+      toast.error('تعذّر فتح العقد للتعديل', err instanceof Error ? err.message : undefined)
+    } finally {
+      setEditLoadingId(null)
+    }
+  }
 
   const printContract = (c: ApiContract) => {
     void printDocument(
@@ -495,6 +574,7 @@ export default function Contracts() {
 
   const onFormDone = (created?: boolean) => {
     setView('list')
+    setEditContract(null)
     if (created) {
       setSearchInput('')
       setSearch('')
@@ -505,13 +585,14 @@ export default function Contracts() {
     }
   }
 
-  if (view === 'form') return <ContractForm key={formKey} onDone={onFormDone} onExpired={lostSession} />
+  if (view === 'form') return <ContractForm key={formKey} contract={editContract} onDone={onFormDone} onExpired={lostSession} />
 
   if (view === 'details' && detailsId != null)
     return (
       <ContractDetails
         contractId={detailsId}
         onBack={() => setView('list')}
+        onEdit={(c) => void openEdit(c)}
         onChanged={reload}
         onExpired={lostSession}
       />
@@ -571,7 +652,7 @@ export default function Contracts() {
         }}
         searchPlaceholder="ابحث برقم العقد أو العميل أو الوحدة…"
         exportName="العقود"
-        actionsWidth="9rem"
+        actionsWidth="11rem"
         onRowClick={(c) => {
           setDetailsId(c.id)
           setView('details')
@@ -584,6 +665,15 @@ export default function Contracts() {
               </Btn>
             )}
             <IconBtn size="sm" icon={<IconEye size={16} />} label={`تفاصيل ${c.number}`} onClick={() => { setDetailsId(c.id); setView('details') }} />
+            {c.status !== 'cancelled' && (
+              <IconBtn
+                size="sm"
+                icon={<IconPencil size={16} />}
+                label={`تعديل ${c.number}`}
+                loading={editLoadingId === c.id}
+                onClick={() => void openEdit(c)}
+              />
+            )}
             <IconBtn size="sm" icon={<IconFile size={16} />} label={`طباعة ${c.number}`} onClick={() => printContract(c)} />
           </div>
         )}
@@ -618,12 +708,25 @@ function QuickChips({ options, value, onPick, label }: { options: readonly numbe
   )
 }
 
-function ContractForm({ onDone, onExpired }: { onDone: (created?: boolean) => void; onExpired: (notice: string) => void }) {
+function ContractForm({
+  contract,
+  onDone,
+  onExpired,
+}: {
+  /** Passed when editing an existing contract; omitted when creating a new one. */
+  contract?: ApiContract | null
+  onDone: (created?: boolean) => void
+  onExpired: (notice: string) => void
+}) {
   const { settings } = useData()
   const toast = useToast()
   const { confirm, dialog: confirmDialog } = useConfirm()
 
-  const [draft, setDraft] = useState<Draft>(() => emptyDraft())
+  const isEdit = contract != null
+  /** A posted contract's collected rows are frozen; a draft has no installments yet. */
+  const isPosted = isEdit && contract?.status === 'active'
+
+  const [draft, setDraft] = useState<Draft>(() => (contract ? draftFromApi(contract) : emptyDraft()))
   const [dirty, setDirty] = useState(false)
   const [errors, setErrors] = useState<Errors<Key>>({})
   const [scheduleErrors, setScheduleErrors] = useState<Record<number, { dueDate?: string; amount?: string }>>({})
@@ -644,6 +747,11 @@ function ContractForm({ onDone, onExpired }: { onDone: (created?: boolean) => vo
   const [saving, setSaving] = useState<'draft' | 'post' | null>(null)
 
   useEffect(() => {
+    // Editing reads the client/unit from the contract itself; the reservation picker is not shown.
+    if (isEdit) {
+      setLoadingReservations(false)
+      return
+    }
     let alive = true
     setLoadingReservations(true)
     setReservationsError(null)
@@ -669,20 +777,36 @@ function ContractForm({ onDone, onExpired }: { onDone: (created?: boolean) => vo
   const lease = type === 'إيجار'
 
   const reservation = useMemo(
-    () => reservations.find((r) => String(r.id) === draft.reservationId) ?? null,
-    [reservations, draft.reservationId],
+    () => (isEdit ? null : (reservations.find((r) => String(r.id) === draft.reservationId) ?? null)),
+    [isEdit, reservations, draft.reservationId],
   )
 
   /**
-   * The unit the contract is for: the lease picker's choice, or the reservation's unit.
-   * Picking a reservation on a lease fills the client/unit pickers (and locks them).
+   * The unit the contract is for: the picker's choice in edit mode, the lease picker's choice, or
+   * the reservation's unit. Picking a reservation on a lease fills the client/unit pickers.
    */
-  const pickedUnitId = lease ? (reservation ? String(reservation.unit_id ?? '') : draft.unitId) : (reservation?.unit_id ? String(reservation.unit_id) : null)
-  const pickedClientId = lease ? (reservation ? String(reservation.client_id) : draft.clientId) : (reservation ? String(reservation.client_id) : null)
+  const pickedUnitId = isEdit
+    ? draft.unitId
+    : lease
+      ? reservation
+        ? String(reservation.unit_id ?? '')
+        : draft.unitId
+      : reservation?.unit_id
+        ? String(reservation.unit_id)
+        : null
+  const pickedClientId = isEdit
+    ? draft.clientId
+    : lease
+      ? reservation
+        ? String(reservation.client_id)
+        : draft.clientId
+      : reservation
+        ? String(reservation.client_id)
+        : null
 
-  // Lease pickers load on demand: clients and the units that can be rented.
+  // Lease (and edit) pickers load on demand: clients and the units that fit the contract type.
   useEffect(() => {
-    if (!lease || pickersLoaded) return
+    if ((!lease && !isEdit) || pickersLoaded) return
     let alive = true
     setLoadingPickers(true)
     setPickersError(null)
@@ -690,8 +814,8 @@ function ContractForm({ onDone, onExpired }: { onDone: (created?: boolean) => vo
       .then(([allClients, availableUnits]) => {
         if (!alive) return
         setClients(allClients)
-        // A rent contract needs a unit that offers rent (purpose rent|both).
-        setRentUnits(availableUnits.filter((u) => u.purpose !== 'sale'))
+        // A rent contract needs a unit that offers rent (purpose rent|both); a sale needs the opposite.
+        setRentUnits(availableUnits.filter((u) => (lease ? u.purpose !== 'sale' : u.purpose !== 'rent')))
         setPickersLoaded(true)
       })
       .catch((err: unknown) => {
@@ -705,7 +829,7 @@ function ContractForm({ onDone, onExpired }: { onDone: (created?: boolean) => vo
     return () => {
       alive = false
     }
-  }, [lease, pickersLoaded, onExpired])
+  }, [lease, isEdit, pickersLoaded, onExpired])
 
   // The picked unit is re-read from the API (type, purpose, area, sale price).
   const unitApiId = pickedUnitId ? Number(pickedUnitId) : null
@@ -721,8 +845,9 @@ function ContractForm({ onDone, onExpired }: { onDone: (created?: boolean) => vo
       .then((u) => {
         if (!alive) return
         setUnit(u)
-        // A sale pre-fills the unit's list price unless the user already set one.
-        if (u.total_price) {
+        // A new sale pre-fills the unit's list price unless the user already set one; an edit keeps
+        // the contract's agreed price.
+        if (!isEdit && u.total_price) {
           setDraft((d) => (d.type === 'بيع' && d.unitPrice == null ? { ...d, unitPrice: Number(u.total_price) } : d))
         }
       })
@@ -758,23 +883,26 @@ function ContractForm({ onDone, onExpired }: { onDone: (created?: boolean) => vo
       description: [u.type_label, u.purpose_label, u.area ? `${money(u.area)} م²` : null].filter(Boolean).join(' · '),
       keywords: u.building_name ?? '',
     }))
-    // A unit taken from a reservation is no longer «متاحة», so the list above may not contain it.
+    // A unit taken from a reservation (or the one an edited contract already holds, now «مباعة») is
+    // no longer «متاحة», so the list above may not contain it.
     const picked = pickedUnitId
     if (picked && !options.some((o) => o.value === picked)) {
       const known = unit && String(unit.id) === picked ? unit : null
       const label = known
         ? `${known.building_name ?? '—'} — ${known.name}`
-        : `${reservation?.building_name ?? '—'} — ${reservation?.unit_name ?? picked}`
+        : isEdit
+          ? `${contract?.building_name ?? '—'} — ${contract?.unit_name ?? picked}`
+          : `${reservation?.building_name ?? '—'} — ${reservation?.unit_name ?? picked}`
       options.unshift({ value: picked, label, description: 'الوحدة الحالية', keywords: '' })
     }
     return options
-  }, [rentUnits, pickedUnitId, unit, reservation])
+  }, [rentUnits, pickedUnitId, unit, reservation, isEdit, contract])
 
   const clientRecord = useMemo(
-    () => (lease && draft.clientId ? (clients.find((c) => String(c.id) === draft.clientId) ?? null) : null),
-    [clients, draft.clientId, lease],
+    () => ((isEdit || lease) && draft.clientId ? (clients.find((c) => String(c.id) === draft.clientId) ?? null) : null),
+    [clients, draft.clientId, lease, isEdit],
   )
-  const clientName = reservation?.client_name ?? clientRecord?.name ?? '—'
+  const clientName = reservation?.client_name ?? clientRecord?.name ?? contract?.client_name ?? '—'
 
   const reservationOptions = useMemo(
     () =>
@@ -787,9 +915,13 @@ function ContractForm({ onDone, onExpired }: { onDone: (created?: boolean) => vo
     [reservations],
   )
 
-  const buildingName = unit?.building_name ?? reservation?.building_name ?? '—'
-  const unitLabel = unitLabelFor(unit, reservation)
-  const depositPaid = money(reservation?.deposit_paid)
+  const buildingName = unit?.building_name ?? reservation?.building_name ?? contract?.building_name ?? '—'
+  const unitLabel =
+    unitLabelFor(unit, reservation) !== '—'
+      ? unitLabelFor(unit, reservation)
+      : ([contract?.unit_type_label, contract?.unit_name].filter(Boolean).join(' ') || '—')
+  /** Money already collected on the deal: the reservation deposit, or a posted contract's paid down payment. */
+  const depositPaid = money(isEdit ? contract?.paid_down_payment : reservation?.deposit_paid)
 
   // ── Sale ────────────────────────────────────────────────────────────────
   const listPrice = draft.unitPrice ?? 0
@@ -825,6 +957,9 @@ function ContractForm({ onDone, onExpired }: { onDone: (created?: boolean) => vo
     }
   }
   const diff = required - scheduled
+  /** Posted rows that already collected money: they may not be moved, re-priced or dropped. */
+  const lockedRows = draft.schedule.filter((r) => r.locked)
+  const hasLocked = lockedRows.length > 0
 
   const interval = draft.distInterval && draft.distInterval > 0 ? draft.distInterval : 1
   const suggestedCount = lease
@@ -844,7 +979,7 @@ function ContractForm({ onDone, onExpired }: { onDone: (created?: boolean) => vo
   }
 
   const changeType = (t: ContractType) => {
-    if (t === type) return
+    if (isEdit || t === type) return
     setDraft((d) => ({
       ...emptyDraft(t),
       date: d.date,
@@ -930,10 +1065,10 @@ function ContractForm({ onDone, onExpired }: { onDone: (created?: boolean) => vo
     const se: Record<number, { dueDate?: string; amount?: string }> = {}
     if (!draft.date) e.date = REQUIRED
 
-    // A sale always starts from a reservation; a lease can pick the client and unit directly.
-    const hasSubject = lease ? Boolean(draft.clientId && draft.unitId) : Boolean(reservation)
+    // A new sale always starts from a reservation; a lease (and any edit) picks client + unit directly.
+    const hasSubject = isEdit ? Boolean(draft.clientId && draft.unitId) : lease ? Boolean(draft.clientId && draft.unitId) : Boolean(reservation)
     if (!hasSubject) {
-      if (lease) {
+      if (isEdit || lease) {
         if (!draft.clientId) e.clientId = REQUIRED
         if (!draft.unitId) e.unitId = REQUIRED
       } else {
@@ -942,7 +1077,7 @@ function ContractForm({ onDone, onExpired }: { onDone: (created?: boolean) => vo
     }
 
     if (unit?.is_sellable === false) {
-      if (lease) e.unitId = 'الوحدة غير قابلة للبيع أو الإيجار'
+      if (isEdit || lease) e.unitId = 'الوحدة غير قابلة للبيع أو الإيجار'
       else e.reservationId = 'الوحدة غير قابلة للبيع أو الإيجار'
     } else if (lease && unit?.purpose === 'sale') {
       e.unitId = 'الوحدة مخصّصة للبيع فقط — غيّر نوع العقد'
@@ -962,7 +1097,8 @@ function ContractForm({ onDone, onExpired }: { onDone: (created?: boolean) => vo
       if (!draft.unitPrice || draft.unitPrice <= 0) e.unitPrice = 'أدخل سعرًا صحيحًا'
       if (draft.downPayment == null) e.downPayment = REQUIRED
       else if (draft.downPayment > price) e.downPayment = discount > 0 ? 'المقدم أكبر من السعر بعد الخصم' : 'المقدم أكبر من سعر الوحدة'
-      else if (draft.downPayment < depositPaid) e.downPayment = `المقدم أقل من دفعات الحجز (${egp(depositPaid)})`
+      else if (draft.downPayment < depositPaid)
+        e.downPayment = `المقدم أقل من ${isEdit ? 'ما تم تحصيله' : 'دفعات الحجز'} (${egp(depositPaid)})`
       if (draft.discount != null && draft.discount < 0) e.discount = 'قيمة غير صحيحة'
       else if (discount > listPrice) e.discount = 'الخصم أكبر من سعر الوحدة'
     }
@@ -991,16 +1127,21 @@ function ContractForm({ onDone, onExpired }: { onDone: (created?: boolean) => vo
       .map((r) => ({
         due_date: r.dueDate!,
         amount: r.amount!,
+        // An existing posted row is updated in place; a new row is created.
+        ...(r.installmentId ? { installment_id: r.installmentId } : {}),
+        // Only a draft's down-payment row is flagged; a posted contract has no down-payment installment.
         ...(r.isDownPayment && { is_down_payment: true }),
-        ...(r.paid ? { paid_amount: Math.min(r.paid, r.amount!) } : {}),
+        // Collected-at-signing amounts are only sent while creating (or editing an unposted draft);
+        // on a posted contract the collected money already exists and must not be written again.
+        ...(!isPosted && r.paid ? { paid_amount: Math.min(r.paid, r.amount!) } : {}),
       }))
 
   const buildInput = (status: 'draft' | 'active'): ContractInput => ({
     type: lease ? 'rent' : 'sale',
     status,
     reservationId: reservation?.id ?? null,
-    clientId: Number(lease ? draft.clientId : reservation!.client_id),
-    unitId: Number(lease ? draft.unitId : reservation!.unit_id),
+    clientId: Number(isEdit ? draft.clientId : lease ? draft.clientId : reservation!.client_id),
+    unitId: Number(isEdit ? draft.unitId : lease ? draft.unitId : reservation!.unit_id),
     date: draft.date!,
     totalPrice: lease ? rentTotal : price,
     discount: !lease && discount > 0 ? discount : null,
@@ -1036,6 +1177,18 @@ function ContractForm({ onDone, onExpired }: { onDone: (created?: boolean) => vo
     if (!draft.date || !pickedClientId || !unitApiId) return
     setSaving(status === 'draft' ? 'draft' : 'post')
     try {
+      if (isEdit && contract) {
+        const updated = await updateContract(contract.id, buildInput(status))
+        setDirty(false)
+        toast.success(
+          'تم تعديل العقد',
+          `${updated.number} — ${updated.installments_count} قسط` +
+            (contract.status === 'active' ? ' · الأقساط المسددة والإيصالات لم تتغير' : ''),
+        )
+        setTimeout(() => onDone(true), 0)
+        return
+      }
+
       const created = await createContract(buildInput(status))
       setDirty(false)
       toast.success(
@@ -1050,7 +1203,7 @@ function ContractForm({ onDone, onExpired }: { onDone: (created?: boolean) => vo
     } catch (err) {
       if (isAuthError(err)) return onExpired('انتهت الجلسة أو التوكن غير صالح. سجّل الدخول من جديد.')
       if (err instanceof ApiError) applyApiErrors(err)
-      else toast.error('تعذّر حفظ العقد', err instanceof Error ? err.message : undefined)
+      else toast.error(isEdit ? 'تعذّر تعديل العقد' : 'تعذّر حفظ العقد', err instanceof Error ? err.message : undefined)
     } finally {
       setSaving(null)
     }
@@ -1064,6 +1217,11 @@ function ContractForm({ onDone, onExpired }: { onDone: (created?: boolean) => vo
     if (!validate(true)) return
     void submit('active')
   }
+  /** Edit mode has one save action: posted contracts resend their schedule so paid rows stay put. */
+  const saveEdit = () => {
+    if (!validate(isPosted)) return
+    void submit('active')
+  }
 
   /* ---------- preview & export ---------- */
 
@@ -1071,7 +1229,7 @@ function ContractForm({ onDone, onExpired }: { onDone: (created?: boolean) => vo
   const previewContract = (status: ContractStatus): Contract => {
     const base = {
       id: 'preview',
-      number: 'جديد',
+      number: contract?.number ?? 'جديد',
       reservationId: reservation ? String(reservation.id) : '',
       unitId: pickedUnitId ?? '',
       clientId: pickedClientId ?? '',
@@ -1114,7 +1272,7 @@ function ContractForm({ onDone, onExpired }: { onDone: (created?: boolean) => vo
     void printDocument(
       <ContractDoc
         settings={settings}
-        contract={previewContract('مسودة')}
+        contract={previewContract(isEdit && contract ? apiStatus(contract.status) : 'مسودة')}
         client={previewClient}
         buildingName={buildingName}
         unitLabel={unitLabel}
@@ -1132,7 +1290,7 @@ function ContractForm({ onDone, onExpired }: { onDone: (created?: boolean) => vo
     )
 
   // Ctrl+S keeps a safe draft; posting stays an explicit click. Ctrl+P prints the contract.
-  useShortcutAction('save', saveDraft)
+  useShortcutAction('save', isEdit ? saveEdit : saveDraft)
   useShortcutAction('print', print)
 
   /* ---------- render ---------- */
@@ -1150,13 +1308,23 @@ function ContractForm({ onDone, onExpired }: { onDone: (created?: boolean) => vo
         <div className="rounded-card border border-warning/40 bg-warning-soft px-4 py-2.5 t-caption text-fg-2">{reservationsError}</div>
       )}
 
-      {/* 1. Type + reservation (sale) / client + unit (lease) */}
+      {isEdit && contract && (
+        <div className="rounded-card border border-hairline bg-neutral-soft px-4 py-2.5 t-caption text-fg-2">
+          تعديل العقد <span className="font-bold tabular-nums text-fg">{contract.number}</span> — {apiStatus(contract.status)}
+          {isPosted && hasLocked && ' · الأقساط التي سُدِّدت لا يتغيّر مبلغها أو تاريخها، والإيصالات لا تُمس.'}
+          {isPosted && !hasLocked && ' · العقد مُرحَّل: يمكن تعديل البيانات والمبالغ ما دام لم يُسدَّد أي قسط.'}
+        </div>
+      )}
+
+      {/* 1. Type + reservation (sale) / client + unit (lease or edit) */}
       <SectionCard
         title="نوع العقد والعميل"
         description={
-          lease
-            ? 'عقد الإيجار: اختر العميل والوحدة مباشرة، أو ابدأ من حجز نشط فيُعبَّأان منه'
-            : 'يُنشأ عقد البيع من حجز نشط؛ العميل والوحدة يؤخذان منه، والسعر يُتفق عليه هنا'
+          isEdit
+            ? 'يمكن تعديل العميل والوحدة وتاريخ العقد؛ نوع العقد لا يتغيّر بعد الإنشاء.'
+            : lease
+              ? 'عقد الإيجار: اختر العميل والوحدة مباشرة، أو ابدأ من حجز نشط فيُعبَّأان منه'
+              : 'يُنشأ عقد البيع من حجز نشط؛ العميل والوحدة يؤخذان منه، والسعر يُتفق عليه هنا'
         }
         icon={<IconCalendar size={20} />}
         columns={2}
@@ -1165,11 +1333,39 @@ function ContractForm({ onDone, onExpired }: { onDone: (created?: boolean) => vo
           <span className="t-label">
             نوع العقد <span className="text-danger">*</span>
           </span>
-          <Segmented label="نوع العقد" options={TYPES} value={type} onChange={changeType} />
+          <Segmented label="نوع العقد" options={TYPES} value={type} onChange={changeType} disabled={isEdit} />
+          {isEdit && <span className="t-caption text-fg-3">نوع العقد لا يمكن تغييره؛ لإنشاء عقد بنوع آخر استخدم «عقد جديد».</span>}
         </div>
 
         <div className="md:col-span-2 flex items-start gap-2">
-          {lease ? (
+          {isEdit ? (
+            <div className="grid w-full gap-3 md:grid-cols-2">
+              <Combobox
+                label="العميل"
+                required
+                placeholder={loadingPickers ? 'جارٍ تحميل العملاء…' : 'ابحث بالاسم أو الهاتف…'}
+                options={clientOptions}
+                value={draft.clientId}
+                error={errors.clientId}
+                disabled={loadingPickers}
+                clearable
+                emptyText="لا يوجد عملاء — أضِف عميلًا من صفحة العملاء"
+                onChange={(v) => pickClient(v)}
+              />
+              <Combobox
+                label="الوحدة"
+                required
+                placeholder={loadingPickers ? 'جارٍ تحميل الوحدات…' : 'ابحث بالمبنى أو رقم الوحدة…'}
+                options={rentUnitOptions}
+                value={draft.unitId}
+                error={errors.unitId}
+                disabled={loadingPickers}
+                clearable
+                emptyText="لا توجد وحدات متاحة تناسب نوع العقد"
+                onChange={(v) => pickUnit(v)}
+              />
+            </div>
+          ) : lease ? (
             <div className="grid w-full gap-3 md:grid-cols-3">
               <Combobox
                 label="الحجز (اختياري)"
@@ -1236,7 +1432,7 @@ function ContractForm({ onDone, onExpired }: { onDone: (created?: boolean) => vo
           )}
         </div>
 
-        {lease && reservation && (
+        {!isEdit && lease && reservation && (
           <p className="md:col-span-2 t-caption text-fg-3">
             عميل ووحدة الحجز تم تعبئتهما تلقائيًا — امسح الحجز أعلاه لاختيارهما مباشرة.
           </p>
@@ -1259,7 +1455,13 @@ function ContractForm({ onDone, onExpired }: { onDone: (created?: boolean) => vo
         {(reservation || unit) && (
           <div className="md:col-span-2 flex flex-wrap items-center gap-x-8 gap-y-2 rounded-ctl border border-hairline bg-neutral-soft px-4 py-2.5 text-sm">
             {reservation && <InfoPair label="تاريخ الحجز" value={fmtDate(day(reservation.reservation_date))} />}
-            {reservation && <InfoPair label="العربون المدفوع" value={egp(depositPaid)} tone={depositPaid > 0 ? 'text-success' : undefined} />}
+            {(reservation || (isEdit && depositPaid > 0)) && (
+              <InfoPair
+                label={isEdit ? 'المقدم المحصل' : 'العربون المدفوع'}
+                value={egp(depositPaid)}
+                tone={depositPaid > 0 ? 'text-success' : undefined}
+              />
+            )}
             {!lease && <InfoPair label="سعر الوحدة المعروض" value={unit?.total_price ? egp(money(unit.total_price)) : '—'} />}
             {unit && <InfoPair label="المساحة" value={`${money(unit.area)} م²`} />}
             {lease && clientRecord?.phone && <InfoPair label="هاتف المستأجر" value={clientRecord.phone} ltr />}
@@ -1269,7 +1471,12 @@ function ContractForm({ onDone, onExpired }: { onDone: (created?: boolean) => vo
 
       {/* 2. Header */}
       <SectionCard title="بيانات العقد" icon={<IconFile size={20} />} columns={2}>
-        <TextInput label="رقم العقد" value="يُولَّد عند الحفظ" readOnly hint={`تلقائيًا (${lease ? 'سنوي' : 'سنوي'})`} />
+        <TextInput
+          label="رقم العقد"
+          value={isEdit && contract ? contract.number : 'يُولَّد عند الحفظ'}
+          readOnly
+          hint={isEdit ? 'الرقم لا يتغيّر' : `تلقائيًا (${lease ? 'سنوي' : 'سنوي'})`}
+        />
         <DatePicker label="تاريخ العقد" required value={draft.date} error={errors.date} onChange={(v) => update({ date: v })} today={TODAY_ISO} />
       </SectionCard>
 
@@ -1372,9 +1579,13 @@ function ContractForm({ onDone, onExpired }: { onDone: (created?: boolean) => vo
       <SectionCard
         title="توزيع الأقساط"
         description={
-          lease
-            ? 'كل قسط = الإيجار الشهري × عدد الأشهر مع تطبيق الزيادة السنوية، والأشهر المقدمة قسط أول في تاريخ العقد'
-            : 'يقسّم المطلوب (السعر − المقدم) إلى أقساط متساوية والأخير يتحمل الفرق؛ ثم عدّل ما تشاء'
+          hasLocked
+            ? 'التوزيع يعيد بناء الأقساط غير المسددة فقط؛ الأقساط التي سُدِّدت تبقى كما هي.'
+            : isEdit
+              ? 'يمكن إعادة توزيع الأقساط؛ الأقساط المسددة (إن وجدت) لا تتغيّر.'
+              : lease
+                ? 'كل قسط = الإيجار الشهري × عدد الأشهر مع تطبيق الزيادة السنوية، والأشهر المقدمة قسط أول في تاريخ العقد'
+                : 'يقسّم المطلوب (السعر − المقدم) إلى أقساط متساوية والأخير يتحمل الفرق؛ ثم عدّل ما تشاء'
         }
         icon={<IconLayers size={20} />}
         columns={3}
@@ -1386,24 +1597,32 @@ function ContractForm({ onDone, onExpired }: { onDone: (created?: boolean) => vo
         </div>
         <DatePicker label="تاريخ أول قسط" value={distFirst} onChange={(v) => update({ distFirst: v })} today={TODAY_ISO} />
         <div className="md:col-span-3 flex flex-wrap items-center gap-3">
-          <Btn iconStart={<IconLayers size={16} />} onClick={distribute}>
+          <Btn iconStart={<IconLayers size={16} />} disabled={hasLocked} onClick={distribute}>
             توزيع
           </Btn>
-          {draft.schedule.length > 0 && <span className="t-caption text-warning">سيتم استبدال الأقساط الحالية.</span>}
+          {hasLocked ? (
+            <span className="t-caption text-warning">لا يمكن إعادة التوزيع: توجد {lockedRows.length} أقساط مسددة محفوظة كما هي.</span>
+          ) : (
+            draft.schedule.length > 0 && <span className="t-caption text-warning">سيتم استبدال الأقساط الحالية.</span>
+          )}
         </div>
       </SectionCard>
 
       {/* 5. Schedule */}
       <SectionCard
         title="جدول الأقساط"
-        description="قابل للتعديل بالكامل: أضف أو احذف أو غيّر أي تاريخ أو مبلغ"
+        description={
+          isEdit
+            ? 'الأقساط التي سُدِّدت لا يتغيّر مبلغها أو تاريخها؛ يمكن تعديل الأقساط غير المسددة أو إضافتها، ويُعيد الخادم توزيعها.'
+            : 'قابل للتعديل بالكامل: أضف أو احذف أو غيّر أي تاريخ أو مبلغ'
+        }
         icon={<IconBuilding size={20} />}
         actions={
           <>
             <Btn variant="glass" size="sm" iconStart={<IconPlus size={16} />} onClick={addRow}>
               إضافة قسط
             </Btn>
-            {!lease && (
+            {!lease && !isEdit && (
               <Btn variant="glass" size="sm" iconStart={<IconWallet size={16} />} onClick={addDownPayment}>
                 إضافة مقدم
               </Btn>
@@ -1444,23 +1663,52 @@ function ContractForm({ onDone, onExpired }: { onDone: (created?: boolean) => vo
                 {orderedRows.map((r, idx) => (
                   <tr
                     key={r.key}
-                    className={cn('align-top', r.isDownPayment && '[&>td]:bg-warning-soft', r.isDownPayment && idx === downRows.length - 1 && regularRows.length > 0 && '[&>td]:border-b-2 [&>td]:border-b-warning/60')}
+                    className={cn(
+                      'align-top',
+                      r.locked && '[&>td]:bg-neutral-soft',
+                      r.isDownPayment && '[&>td]:bg-warning-soft',
+                      r.isDownPayment && idx === downRows.length - 1 && regularRows.length > 0 && '[&>td]:border-b-2 [&>td]:border-b-warning/60',
+                    )}
                   >
                     <td className="px-1.5 py-3 text-center tabular-nums text-fg-2">
                       {r.isDownPayment ? (
                         <span className="inline-block rounded-full border border-warning/40 bg-warning-soft px-2 py-0.5 text-[11px] font-bold text-warning">مقدم</span>
+                      ) : r.locked ? (
+                        <span
+                          className="inline-block rounded-full border border-hairline bg-neutral px-2 py-0.5 text-[11px] font-bold text-fg-2"
+                          title="قسط سُدِّد (كليًا أو جزئيًا): مبلغه وتاريخه محفوظان والإيصالات لا تتغيّر"
+                        >
+                          مسدد
+                        </span>
                       ) : (
                         regularRows.indexOf(r) + 1
                       )}
                     </td>
                     <td className="px-1.5 py-2">
-                      <DatePicker aria-label={r.isDownPayment ? 'تاريخ المقدم' : `تاريخ القسط ${regularRows.indexOf(r) + 1}`} value={r.dueDate} error={scheduleErrors[r.key]?.dueDate} onChange={(v) => setRow(r.key, { dueDate: v })} today={TODAY_ISO} />
+                      {r.locked ? (
+                        <span className="tabular-nums">{r.dueDate ? fmtDate(r.dueDate) : '—'}</span>
+                      ) : (
+                        <DatePicker aria-label={r.isDownPayment ? 'تاريخ المقدم' : `تاريخ القسط ${regularRows.indexOf(r) + 1}`} value={r.dueDate} error={scheduleErrors[r.key]?.dueDate} onChange={(v) => setRow(r.key, { dueDate: v })} today={TODAY_ISO} />
+                      )}
                     </td>
                     <td className="px-1.5 py-2">
-                      <NumericInput aria-label={r.isDownPayment ? 'مبلغ المقدم' : `مبلغ القسط ${regularRows.indexOf(r) + 1}`} suffix="ج.م" min={0} value={r.amount} error={scheduleErrors[r.key]?.amount} onChange={(v) => setRow(r.key, { amount: v })} />
+                      {r.locked ? (
+                        <span className="tabular-nums">{r.amount != null ? egp(r.amount) : '—'}</span>
+                      ) : (
+                        <NumericInput aria-label={r.isDownPayment ? 'مبلغ المقدم' : `مبلغ القسط ${regularRows.indexOf(r) + 1}`} suffix="ج.م" min={0} value={r.amount} error={scheduleErrors[r.key]?.amount} onChange={(v) => setRow(r.key, { amount: v })} />
+                      )}
                     </td>
                     <td className="px-1.5 py-2">
-                      <NumericInput aria-label={r.isDownPayment ? 'المدفوع من المقدم' : `المدفوع من القسط ${regularRows.indexOf(r) + 1}`} suffix="ج.م" min={0} max={r.amount ?? undefined} value={r.paid ?? null} onChange={(v) => setRow(r.key, { paid: v })} />
+                      <NumericInput
+                        aria-label={r.isDownPayment ? 'المدفوع من المقدم' : `المدفوع من القسط ${regularRows.indexOf(r) + 1}`}
+                        suffix="ج.م"
+                        min={0}
+                        max={r.amount ?? undefined}
+                        value={r.paid ?? null}
+                        readOnly={isEdit}
+                        stepper={!isEdit}
+                        onChange={(v) => setRow(r.key, { paid: v })}
+                      />
                     </td>
                     <td className="px-1.5 py-3">
                       <PaidBox amount={r.amount ?? 0} paid={r.paid ?? 0} />
@@ -1469,7 +1717,11 @@ function ContractForm({ onDone, onExpired }: { onDone: (created?: boolean) => vo
                       <RemainingBox value={r.isDownPayment ? null : (remainingAfter.get(r.key) ?? 0)} />
                     </td>
                     <td className="px-1.5 py-2">
-                      <IconBtn size="sm" icon={<IconTrash size={16} />} label={r.isDownPayment ? 'حذف المقدم' : `حذف القسط ${regularRows.indexOf(r) + 1}`} className="text-danger" onClick={() => void removeRow(r.key)} />
+                      {r.locked ? (
+                        <span className="t-caption text-fg-3" title="لا يمكن حذف قسط سُدِّد">—</span>
+                      ) : (
+                        <IconBtn size="sm" icon={<IconTrash size={16} />} label={r.isDownPayment ? 'حذف المقدم' : `حذف القسط ${regularRows.indexOf(r) + 1}`} className="text-danger" onClick={() => void removeRow(r.key)} />
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -1479,21 +1731,36 @@ function ContractForm({ onDone, onExpired }: { onDone: (created?: boolean) => vo
         )}
       </SectionCard>
 
-      <FormFooter
-        dirty={dirty}
-        saving={saving !== null}
-        onSave={post}
-        saveLabel="ترحيل العقد"
-        onCancel={() => guard(() => onDone(false))}
-        cancelLabel="إلغاء"
-      >
-        <Btn variant="glass" onClick={print} aria-keyshortcuts="Control+P Meta+P" title={`طباعة العقد (${shortcutLabel('P')})`}>
-          طباعة العقد
-        </Btn>
-        <Btn variant="glass" loading={saving === 'draft'} onClick={saveDraft} aria-keyshortcuts="Control+S Meta+S" title={`حفظ كمسودة (${shortcutLabel('S')})`}>
-          حفظ كمسودة
-        </Btn>
-      </FormFooter>
+      {isEdit ? (
+        <FormFooter
+          dirty={dirty}
+          saving={saving !== null}
+          onSave={saveEdit}
+          saveLabel="حفظ التعديل"
+          onCancel={() => guard(() => onDone(false))}
+          cancelLabel="إلغاء"
+        >
+          <Btn variant="glass" onClick={print} aria-keyshortcuts="Control+P Meta+P" title={`طباعة العقد (${shortcutLabel('P')})`}>
+            طباعة العقد
+          </Btn>
+        </FormFooter>
+      ) : (
+        <FormFooter
+          dirty={dirty}
+          saving={saving !== null}
+          onSave={post}
+          saveLabel="ترحيل العقد"
+          onCancel={() => guard(() => onDone(false))}
+          cancelLabel="إلغاء"
+        >
+          <Btn variant="glass" onClick={print} aria-keyshortcuts="Control+P Meta+P" title={`طباعة العقد (${shortcutLabel('P')})`}>
+            طباعة العقد
+          </Btn>
+          <Btn variant="glass" loading={saving === 'draft'} onClick={saveDraft} aria-keyshortcuts="Control+S Meta+S" title={`حفظ كمسودة (${shortcutLabel('S')})`}>
+            حفظ كمسودة
+          </Btn>
+        </FormFooter>
+      )}
 
       {prompt}
       {confirmDialog}
@@ -1522,11 +1789,14 @@ function Stat({ label, value, tone }: { label: string; value: ReactNode; tone?: 
 function ContractDetails({
   contractId,
   onBack,
+  onEdit,
   onChanged,
   onExpired,
 }: {
   contractId: number
   onBack: () => void
+  /** Opens the edit form with the loaded contract (draft or active only). */
+  onEdit: (contract: ApiContract) => void
   onChanged: () => void
   onExpired: (notice: string) => void
 }) {
@@ -1686,6 +1956,11 @@ function ContractDetails({
           <Btn variant="glass" iconStart={<IconFile size={16} />} onClick={print}>
             طباعة العقد
           </Btn>
+          {canCancel && (
+            <Btn variant="glass" iconStart={<IconPencil size={16} />} onClick={() => onEdit(data)}>
+              تعديل
+            </Btn>
+          )}
           {draft && (
             <Btn iconStart={<IconCheck size={16} />} loading={posting} onClick={() => void post()}>
               ترحيل العقد
