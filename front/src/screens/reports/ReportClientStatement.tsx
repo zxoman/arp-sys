@@ -45,6 +45,8 @@ type Entry = {
   order: number
   label: string
   contract: string | null
+  /** The unit of that contract, so the printed/exported line names it too. */
+  unit: string | null
   debit: number
   credit: number
 }
@@ -57,6 +59,7 @@ type ContractRow = {
   number: string
   type: ContractType
   date: ISODate | null
+  building: string | null
   unit: string | null
   status: string
   value: number
@@ -82,6 +85,7 @@ function contractRow(c: ApiCustomerStatementContract): ContractRow {
     number: c.number,
     type: contractType(c.type),
     date: (c.contract_date ?? '').slice(0, 10) || null,
+    building: c.building ?? null,
     unit: c.unit,
     status: c.status ?? '',
     value: num(c.total_price),
@@ -186,7 +190,7 @@ export default function ReportClientStatement() {
     if (!data) return []
     const typeOf = new Map(data.contracts.map((c) => [c.id, contractType(c.type)]))
     const number = new Map(data.contracts.map((c) => [c.id, c.number]))
-    const unit = new Map(data.contracts.map((c) => [c.id, c.unit]))
+    const unitOf = new Map(data.contracts.map((c) => [c.id, c.unit ?? null]))
     const seq = new Map<number, number>()
     for (const c of data.contracts) for (const i of c.installments) seq.set(i.id, i.sequence_number)
 
@@ -200,8 +204,9 @@ export default function ReportClientStatement() {
           id: `dp-${c.id}`,
           date: c.contract_date.slice(0, 10),
           order: 0,
-          label: `${what}${unit.get(c.id) ? ` الوحدة ${unit.get(c.id)}` : ''}`,
+          label: what,
           contract: c.number,
+          unit: c.unit ?? null,
           debit: upfront,
           credit: 0,
         })
@@ -214,6 +219,7 @@ export default function ReportClientStatement() {
           order: 1,
           label: `استحقاق ${paymentLabel(contractType(c.type), i.sequence_number)}`,
           contract: c.number,
+          unit: c.unit ?? null,
           debit: num(i.amount),
           credit: 0,
         })
@@ -236,6 +242,7 @@ export default function ReportClientStatement() {
         order: 2,
         label: method ? `${what} (${method})` : what,
         contract: p.contract_id !== null ? (number.get(p.contract_id) ?? p.contract_number) : null,
+        unit: p.contract_id !== null ? (unitOf.get(p.contract_id) ?? null) : null,
         debit: 0,
         credit: num(p.amount),
       })
@@ -268,7 +275,13 @@ export default function ReportClientStatement() {
   const cancelled = useMemo(() => (data?.payments ?? []).filter((p) => p.is_cancelled || p.status === 'cancelled'), [data])
 
   const contractOptions = useMemo(
-    () => [{ value: '', label: 'كل العقود' }, ...contracts.map((c) => ({ value: c.number, label: `${c.number} — ${contractTypeLabel(c.type)}${c.unit ? ` — وحدة ${c.unit}` : ''}` }))],
+    () => [
+      { value: '', label: 'كل العقود' },
+      ...contracts.map((c) => ({
+        value: c.number,
+        label: `${c.number} — ${contractTypeLabel(c.type)}${c.building ? ` — ${c.building}` : ''}${c.unit ? ` — وحدة ${c.unit}` : ''}`,
+      })),
+    ],
     [contracts],
   )
 
@@ -278,10 +291,16 @@ export default function ReportClientStatement() {
       {
         key: 'label',
         header: 'البيان',
+        // The printed/exported statement has no unit column, so every line names its contract and
+        // the unit that contract sits on (a reservation payment has neither).
+        value: (e) => `${e.label}${e.contract ? ` — عقد ${e.contract}` : ''}${e.unit ? ` — وحدة ${e.unit}` : ''}`,
         cell: (e) => (
           <span className="grid">
             <span className={e.credit ? 'text-success' : 'text-fg'}>{e.label}</span>
-            <span className="t-caption tabular-nums">{e.contract ? `عقد ${e.contract}` : 'حجز — بدون عقد'}</span>
+            <span className="t-caption tabular-nums">
+              {e.contract ? `عقد ${e.contract}` : 'حجز — بدون عقد'}
+              {e.unit ? ` · وحدة ${e.unit}` : ''}
+            </span>
           </span>
         ),
       },
@@ -296,7 +315,7 @@ export default function ReportClientStatement() {
     () => [
       { key: 'number', header: CODE_LABEL.contract, cell: (r) => <span className="font-semibold tabular-nums text-fg">{r.number}</span> },
       serialColumn('contract', (r) => r.number),
-      { key: 'unit', header: 'الوحدة', value: (r) => r.unit ?? '', cell: (r) => r.unit ?? <span className="text-fg-3">—</span> },
+      { key: 'unit', header: 'الوحدة', value: (r) => [r.building, r.unit].filter(Boolean).join(' — '), cell: (r) => [r.building, r.unit].filter(Boolean).join(' — ') || <span className="text-fg-3">—</span> },
       { key: 'type', header: 'النوع', value: (r) => contractTypeLabel(r.type), cell: (r) => <StatusChip status={contractTypeLabel(r.type)} tone={CONTRACT_TYPE_TONE[r.type]} size="sm" /> },
       { key: 'value', header: 'قيمة العقد', align: 'end', cell: (r) => <Money v={r.value} /> },
       { key: 'upfront', header: 'المقدم/التأمين', align: 'end', cell: (r) => <Money v={r.upfront} /> },
@@ -339,7 +358,26 @@ export default function ReportClientStatement() {
   }, [columns, totals, closing])
 
   const active = !!(contractNumber || from || to)
-  const units = useMemo(() => [...new Set(contracts.map((c) => c.unit).filter((u): u is string => !!u))], [contracts])
+  /** The contract the statement is limited to, if any: the header and the printout name its unit. */
+  const pickedContract = contractNumber ? (contracts.find((c) => c.number === contractNumber) ?? null) : null
+  /** Scoped to the displayed contracts, so a single-contract print names that unit and nothing else. */
+  const units = useMemo(() => [...new Set(shownContracts.map((c) => c.unit).filter((u): u is string => !!u))], [shownContracts])
+  const unitsLabel = pickedContract ? 'الوحدة' : 'الوحدات'
+  const statementTitle = data
+    ? `كشف حساب ${data.client.name}${pickedContract ? ` — عقد ${pickedContract.number}` : ''}`
+    : `كشف حساب عميل${pickedContract ? ` — عقد ${pickedContract.number}` : ''}`
+  /** A statement limited to one contract must say which contract it is and where it sits. */
+  const contractDetails: (readonly [string, string])[] = pickedContract
+    ? [
+        [
+          'العقد',
+          `${pickedContract.number} — ${contractTypeLabel(pickedContract.type)}` +
+            (pickedContract.date ? ` بتاريخ ${fmtDate(pickedContract.date)}` : ''),
+        ],
+        ['العقار', pickedContract.building ?? '—'],
+        ['الوحدة', pickedContract.unit ?? '—'],
+      ]
+    : []
 
   return (
     <>
@@ -387,7 +425,7 @@ export default function ReportClientStatement() {
               </div>
             </div>
             <Pair label="الرقم القومي" value={<bdi dir="ltr" className="tabular-nums">{picked?.keywords || '—'}</bdi>} />
-            <Pair label="الوحدات" value={units.length ? units.join('، ') : 'لا توجد'} />
+            <Pair label={unitsLabel} value={units.length ? units.join('، ') : 'لا توجد'} />
             <Pair label="العقود" value={<span className="tabular-nums">{contracts.length}</span>} />
             <Pair label="الفترة" value={<span className="tabular-nums">{from || to ? `${from ? fmtDate(from) : 'البداية'} — ${to ? fmtDate(to) : 'اليوم'}` : 'كل الحركات'}</span>} />
           </GlassSurface>
@@ -421,8 +459,8 @@ export default function ReportClientStatement() {
             </p>
           )}
           <ReportActions
-            title={data ? `كشف حساب ${data.client.name}` : 'كشف حساب عميل'}
-            fileName={`كشف-حساب-${(data?.client.name ?? 'عميل').replace(/\s+/g, '-')}`}
+            title={statementTitle}
+            fileName={`كشف-حساب-${(data?.client.name ?? 'عميل').replace(/\s+/g, '-')}${pickedContract ? `-عقد-${pickedContract.number}` : ''}`}
             columns={columns}
             rows={shown}
             shareText={`مدين ${egp(totals.debit)} · دائن ${egp(totals.credit)} · الرصيد ${egp(closing)}`}
@@ -430,7 +468,7 @@ export default function ReportClientStatement() {
               ['العميل', data?.client.name ?? picked?.label ?? '—'],
               ['الهاتف', data?.client.phone ?? '—'],
               ['الرقم القومي', picked?.keywords || '—'],
-              ['الوحدات', units.length ? units.join('، ') : 'لا توجد'],
+              ...contractDetails,
               ['الفترة', from || to ? `${from ? fmtDate(from) : 'البداية'} — ${to ? fmtDate(to) : 'اليوم'}` : 'كل الحركات'],
               ['إجمالي المدين', egp(totals.debit)],
               ['إجمالي الدائن (المسدد)', egp(totals.credit)],

@@ -22,7 +22,7 @@ class CustomerStatementService extends BaseReportService
         // Contracts
         $contracts = Contract::where('client_id', $clientId)
             ->whereBetween('contract_date', [$fromDate, $toDate])
-            ->with('unit', 'installments')
+            ->with('unit.building', 'installments')
             ->orderBy('contract_date')
             ->get();
 
@@ -114,6 +114,8 @@ class CustomerStatementService extends BaseReportService
                 'number' => $c->number,
                 'type' => $c->type?->value,
                 'contract_date' => $c->contract_date,
+                // The unit identifies the deal: a statement filtered to one contract prints them.
+                'building' => $c->unit?->building?->name,
                 'unit' => $c->unit?->name,
                 'total_price' => $this->money($totalPrice),
                 'agreed_down_payment' => $this->money($downPaymentAgreed),

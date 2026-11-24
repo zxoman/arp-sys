@@ -1719,6 +1719,8 @@ export interface ApiCustomerStatementContract {
   number: string
   type: 'sale' | 'rent' | null
   contract_date: string | null
+  /** The building/unit the contract is on (so a statement for one contract names them). */
+  building: string | null
   unit: string | null
   total_price: string
   agreed_down_payment: string

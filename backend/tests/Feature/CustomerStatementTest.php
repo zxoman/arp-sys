@@ -149,6 +149,9 @@ class CustomerStatementTest extends TestCase
         $row = $data['contracts'][0];
         $this->assertSame($contract->number, $row['number']);
         $this->assertSame('sale', $row['type']);
+        // The front prints a statement limited to one contract, so the row must name where it sits.
+        $this->assertSame($unit->name, $row['unit']);
+        $this->assertSame($unit->building->name, $row['building']);
         $this->assertSame(100000.0, (float) $row['total_price']);
         $this->assertSame(20000.0, (float) $row['agreed_down_payment']);
         $this->assertSame(5000.0, (float) $row['down_payment_paid']);
