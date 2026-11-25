@@ -37,6 +37,9 @@ const STATUS_LABEL: Record<string, ContractStatus> = { draft: 'مسودة', acti
 const contractType = (type: 'sale' | 'rent' | null): ContractType => (type === 'rent' ? 'إيجار' : 'بيع')
 const num = (v: string | number | null | undefined) => Number(v ?? 0)
 const Money = ({ v, warn }: { v: number; warn?: boolean }) => <span className={`tabular-nums ${warn && v > 0 ? 'text-warning' : ''}`}>{egp(v)}</span>
+/** A unit is always printed with its building next to the number: «A 122». */
+const unitWithBuilding = (building: string | null | undefined, unit: string | null | undefined): string | null =>
+  [building, unit].filter(Boolean).join(' ') || null
 
 /** One movement of the ledger: the down payment and each scheduled row debit, each payment credits. */
 type Entry = {
@@ -45,7 +48,7 @@ type Entry = {
   order: number
   label: string
   contract: string | null
-  /** The unit of that contract, so the printed/exported line names it too. */
+  /** The unit of that contract with its building, so the printed line reads «A 122». */
   unit: string | null
   debit: number
   credit: number
@@ -190,7 +193,7 @@ export default function ReportClientStatement() {
     if (!data) return []
     const typeOf = new Map(data.contracts.map((c) => [c.id, contractType(c.type)]))
     const number = new Map(data.contracts.map((c) => [c.id, c.number]))
-    const unitOf = new Map(data.contracts.map((c) => [c.id, c.unit ?? null]))
+    const unitOf = new Map(data.contracts.map((c) => [c.id, unitWithBuilding(c.building, c.unit)]))
     const seq = new Map<number, number>()
     for (const c of data.contracts) for (const i of c.installments) seq.set(i.id, i.sequence_number)
 
@@ -206,7 +209,7 @@ export default function ReportClientStatement() {
           order: 0,
           label: what,
           contract: c.number,
-          unit: c.unit ?? null,
+          unit: unitOf.get(c.id) ?? null,
           debit: upfront,
           credit: 0,
         })
@@ -219,7 +222,7 @@ export default function ReportClientStatement() {
           order: 1,
           label: `استحقاق ${paymentLabel(contractType(c.type), i.sequence_number)}`,
           contract: c.number,
-          unit: c.unit ?? null,
+          unit: unitOf.get(c.id) ?? null,
           debit: num(i.amount),
           credit: 0,
         })
@@ -277,10 +280,13 @@ export default function ReportClientStatement() {
   const contractOptions = useMemo(
     () => [
       { value: '', label: 'كل العقود' },
-      ...contracts.map((c) => ({
-        value: c.number,
-        label: `${c.number} — ${contractTypeLabel(c.type)}${c.building ? ` — ${c.building}` : ''}${c.unit ? ` — وحدة ${c.unit}` : ''}`,
-      })),
+      ...contracts.map((c) => {
+        const unit = unitWithBuilding(c.building, c.unit)
+        return {
+          value: c.number,
+          label: `${c.number} — ${contractTypeLabel(c.type)}${unit ? ` — وحدة ${unit}` : ''}`,
+        }
+      }),
     ],
     [contracts],
   )
@@ -315,7 +321,7 @@ export default function ReportClientStatement() {
     () => [
       { key: 'number', header: CODE_LABEL.contract, cell: (r) => <span className="font-semibold tabular-nums text-fg">{r.number}</span> },
       serialColumn('contract', (r) => r.number),
-      { key: 'unit', header: 'الوحدة', value: (r) => [r.building, r.unit].filter(Boolean).join(' — '), cell: (r) => [r.building, r.unit].filter(Boolean).join(' — ') || <span className="text-fg-3">—</span> },
+      { key: 'unit', header: 'الوحدة', value: (r) => unitWithBuilding(r.building, r.unit) ?? '', cell: (r) => unitWithBuilding(r.building, r.unit) ?? <span className="text-fg-3">—</span> },
       { key: 'type', header: 'النوع', value: (r) => contractTypeLabel(r.type), cell: (r) => <StatusChip status={contractTypeLabel(r.type)} tone={CONTRACT_TYPE_TONE[r.type]} size="sm" /> },
       { key: 'value', header: 'قيمة العقد', align: 'end', cell: (r) => <Money v={r.value} /> },
       { key: 'upfront', header: 'المقدم/التأمين', align: 'end', cell: (r) => <Money v={r.upfront} /> },
@@ -361,7 +367,10 @@ export default function ReportClientStatement() {
   /** The contract the statement is limited to, if any: the header and the printout name its unit. */
   const pickedContract = contractNumber ? (contracts.find((c) => c.number === contractNumber) ?? null) : null
   /** Scoped to the displayed contracts, so a single-contract print names that unit and nothing else. */
-  const units = useMemo(() => [...new Set(shownContracts.map((c) => c.unit).filter((u): u is string => !!u))], [shownContracts])
+  const units = useMemo(
+    () => [...new Set(shownContracts.map((c) => unitWithBuilding(c.building, c.unit)).filter((u): u is string => !!u))],
+    [shownContracts],
+  )
   const unitsLabel = pickedContract ? 'الوحدة' : 'الوحدات'
   const statementTitle = data
     ? `كشف حساب ${data.client.name}${pickedContract ? ` — عقد ${pickedContract.number}` : ''}`
@@ -375,7 +384,7 @@ export default function ReportClientStatement() {
             (pickedContract.date ? ` بتاريخ ${fmtDate(pickedContract.date)}` : ''),
         ],
         ['العقار', pickedContract.building ?? '—'],
-        ['الوحدة', pickedContract.unit ?? '—'],
+        ['الوحدة', unitWithBuilding(pickedContract.building, pickedContract.unit) ?? '—'],
       ]
     : []
 
