@@ -372,6 +372,11 @@ export default function ReportClientStatement() {
     [shownContracts],
   )
   const unitsLabel = pickedContract ? 'الوحدة' : 'الوحدات'
+  /** Every unit the client holds, across all their contracts: the printed summary is client-level. */
+  const ownedUnits = useMemo(
+    () => [...new Set(contracts.map((c) => unitWithBuilding(c.building, c.unit)).filter((u): u is string => !!u))],
+    [contracts],
+  )
   const statementTitle = data
     ? `كشف حساب ${data.client.name}${pickedContract ? ` — عقد ${pickedContract.number}` : ''}`
     : `كشف حساب عميل${pickedContract ? ` — عقد ${pickedContract.number}` : ''}`
@@ -478,9 +483,9 @@ export default function ReportClientStatement() {
               ['الهاتف', data?.client.phone ?? '—'],
               ['الرقم القومي', picked?.keywords || '—'],
               ...contractDetails,
-              // A statement for the whole client prints the units they hold; a single-contract
-              // print already names its unit in the contract details, so it is not repeated.
-              ...(pickedContract ? [] : ([['الوحدات المملوكة', units.length ? units.join('، ') : '—']] as const)),
+              // The units are a client-level summary, so they print even when the statement is
+              // limited to one contract (the contract details already name its unit).
+              ['الوحدات المملوكة', ownedUnits.length ? ownedUnits.join('، ') : '—'],
               ['الفترة', from || to ? `${from ? fmtDate(from) : 'البداية'} — ${to ? fmtDate(to) : 'اليوم'}` : 'كل الحركات'],
               ['إجمالي المدين', egp(totals.debit)],
               ['إجمالي الدائن (المسدد)', egp(totals.credit)],
