@@ -478,6 +478,9 @@ export default function ReportClientStatement() {
               ['الهاتف', data?.client.phone ?? '—'],
               ['الرقم القومي', picked?.keywords || '—'],
               ...contractDetails,
+              // A statement for the whole client prints the units they hold; a single-contract
+              // print already names its unit in the contract details, so it is not repeated.
+              ...(pickedContract ? [] : ([['الوحدات المملوكة', units.length ? units.join('، ') : '—']] as const)),
               ['الفترة', from || to ? `${from ? fmtDate(from) : 'البداية'} — ${to ? fmtDate(to) : 'اليوم'}` : 'كل الحركات'],
               ['إجمالي المدين', egp(totals.debit)],
               ['إجمالي الدائن (المسدد)', egp(totals.credit)],
