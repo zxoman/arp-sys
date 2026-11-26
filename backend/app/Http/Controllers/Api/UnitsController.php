@@ -43,7 +43,14 @@ class UnitsController extends Controller
             $query->where('is_sellable', filter_var(request('sellable'), FILTER_VALIDATE_BOOLEAN));
         }
         if ($search = trim((string) request('search'))) {
-            $query->where('name', 'like', "%{$search}%");
+            // Every word must match the unit number or its building's name, so «A 122» finds the
+            // unit 122 in building A and a bare building name lists all its units.
+            foreach (preg_split('/\s+/', $search, -1, PREG_SPLIT_NO_EMPTY) as $token) {
+                $query->where(function ($q) use ($token) {
+                    $q->where('name', 'like', "%{$token}%")
+                        ->orWhereHas('building', fn ($b) => $b->where('name', 'like', "%{$token}%"));
+                });
+            }
         }
 
         $sortable = ['id', 'name', 'type', 'activity', 'purpose', 'area', 'price_per_meter', 'sale_price', 'status', 'created_at'];

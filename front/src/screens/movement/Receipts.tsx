@@ -7,14 +7,22 @@ import {
   ApiError,
   cancelReceipt,
   clearToken,
+  CONTRACT_STATUS_FROM_API,
   createReceipt,
   fetchActiveContracts,
+  fetchClientContracts,
+  fetchClients,
   fetchContract,
   fetchReceipts,
+  fetchUnits,
   PAYMENT_METHOD_TO_API,
   PAYMENT_METHODS,
+  purposeLabel,
+  unitTypeLabel,
+  type ApiClient,
   type ApiContract,
   type ApiReceipt,
+  type ApiUnit,
   type PageMeta,
 } from '@/lib/api'
 import {
@@ -24,10 +32,13 @@ import {
   DatePicker,
   IconAlert,
   IconCheckCircle,
+  IconChevronPrev,
   IconFile,
   IconTrash,
   IconWallet,
+  matchesAll,
   Modal,
+  normalizeSearch,
   NumericInput,
   SectionCard,
   Select,
@@ -122,6 +133,80 @@ const STATUS_FROM_API: Record<string, string> = { valid: 'مدفوع', cancelled
 const day = (value: string) => value.slice(0, 10)
 
 /* ==================================================================
+   Search drill-down: client → units → receipts, unit → receipts
+   ================================================================== */
+
+type SearchBy = 'client' | 'unit' | 'receipt'
+const SEARCH_BY_OPTIONS: readonly { value: SearchBy; label: string }[] = [
+  { value: 'client', label: 'العميل' },
+  { value: 'unit', label: 'الوحدة' },
+  { value: 'receipt', label: 'رقم الإيصال' },
+]
+
+const EMPTY_META: PageMeta = { current_page: 1, last_page: 1, per_page: 15, total: 0, from: null, to: null }
+
+/** A unit row in the drill-down, whether it came from a client's contracts or from the units list. */
+type UnitRow = {
+  id: number
+  building: string | null
+  name: string
+  type: string | null
+  purpose: string | null
+  status: string | null
+  contract: string | null
+  contractType: 'sale' | 'rent' | null
+  contractStatus: string | null
+  contractDate: string | null
+}
+
+/** «A 122» — the building name followed by the unit number. */
+const unitLabel = (u: UnitRow) => [u.building, u.name].filter(Boolean).join(' ')
+
+const unitRowOfApi = (u: ApiUnit): UnitRow => ({
+  id: u.id,
+  building: u.building_name,
+  name: u.name,
+  type: u.type_label ?? unitTypeLabel(u.type),
+  purpose: u.purpose_label ?? purposeLabel(u.purpose),
+  status: u.is_sellable ? (u.status_label ?? '—') : 'غير قابلة للبيع',
+  contract: null,
+  contractType: null,
+  contractStatus: null,
+  contractDate: null,
+})
+
+/**
+ * The units a client holds, one row per unit, from the client's contracts. A cancelled contract is
+ * excluded (its unit went back to the pool); when a unit has more than one open contract, the active
+ * one wins over the draft.
+ */
+function unitRowsOfContracts(contracts: readonly ApiContract[]): UnitRow[] {
+  const byUnit = new Map<number, { row: UnitRow; rank: number }>()
+  for (const c of contracts) {
+    if (c.status === 'cancelled') continue
+    const rank = c.status === 'active' ? 2 : 1
+    const previous = byUnit.get(c.unit_id)
+    if (previous && previous.rank >= rank) continue
+    byUnit.set(c.unit_id, {
+      rank,
+      row: {
+        id: c.unit_id,
+        building: c.building_name ?? null,
+        name: c.unit_name ?? '',
+        type: c.unit_type_label ?? null,
+        purpose: null,
+        status: CONTRACT_STATUS_FROM_API[c.status] ?? c.status,
+        contract: c.number,
+        contractType: c.type,
+        contractStatus: c.status,
+        contractDate: c.contract_date ? day(c.contract_date) : null,
+      },
+    })
+  }
+  return [...byUnit.values()].map((v) => v.row)
+}
+
+/* ==================================================================
    Screen
    ================================================================== */
 
@@ -133,7 +218,7 @@ export default function Receipts() {
 
   // ── Receipts list (server) ───────────────────────────────────────────────
   const [rows, setRows] = useState<ApiReceipt[]>([])
-  const [meta, setMeta] = useState<PageMeta>({ current_page: 1, last_page: 1, per_page: 15, total: 0, from: null, to: null })
+  const [meta, setMeta] = useState<PageMeta>(EMPTY_META)
   const [loading, setLoading] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [searchInput, setSearchInput] = useState('')
@@ -143,6 +228,83 @@ export default function Receipts() {
   const [page, setPage] = useState(0)
   const [reloadKey, setReloadKey] = useState(0)
   const reload = () => setReloadKey((k) => k + 1)
+
+  // ── Drill-down: search by client → their units → the unit's receipts ─────
+  const [searchBy, setSearchBy] = useState<SearchBy>('receipt')
+  const [pickedClient, setPickedClient] = useState<ApiClient | null>(null)
+  const [pickedUnit, setPickedUnit] = useState<UnitRow | null>(null)
+  const [clients, setClients] = useState<ApiClient[]>([])
+  const [clientsMeta, setClientsMeta] = useState<PageMeta>(EMPTY_META)
+  /** Units matching the «بالوحدة» search. */
+  const [searchUnits, setSearchUnits] = useState<UnitRow[]>([])
+  const [searchUnitsMeta, setSearchUnitsMeta] = useState<PageMeta>(EMPTY_META)
+  /** The units a picked client owns (read from their contracts). */
+  const [clientUnits, setClientUnits] = useState<UnitRow[]>([])
+  const [navLoading, setNavLoading] = useState(false)
+  const [navError, setNavError] = useState<string | null>(null)
+
+  /** Which table the drill-down shows: the client list, a unit list, or the receipts. */
+  const level: 'clients' | 'units' | 'receipts' = pickedUnit
+    ? 'receipts'
+    : searchBy === 'client'
+      ? pickedClient
+        ? 'units'
+        : 'clients'
+      : searchBy === 'unit'
+        ? 'units'
+        : 'receipts'
+
+  const resetSearch = () => {
+    setSearchInput('')
+    setSearch('')
+    setPage(0)
+  }
+
+  /** Each level remembers its own search text, so going back restores the results you left. */
+  const savedSearch = useRef({ clients: '', units: '' })
+
+  const restoreSearch = (value: string) => {
+    setSearchInput(value)
+    setSearch(value.trim())
+    setPage(0)
+  }
+
+  const changeSearchBy = (value: SearchBy) => {
+    setSearchBy(value)
+    setPickedClient(null)
+    setPickedUnit(null)
+    resetSearch()
+  }
+
+  const drillToClient = (client: ApiClient) => {
+    savedSearch.current.clients = searchInput
+    setPickedClient(client)
+    setPickedUnit(null)
+    // Don't show the previous client's units while the new client's contracts load.
+    setClientUnits([])
+    resetSearch()
+  }
+
+  const drillToUnit = (unit: UnitRow) => {
+    savedSearch.current.units = searchInput
+    setPickedUnit(unit)
+    // Don't show the previous list under the unit's receipts while they load.
+    setRows([])
+    resetSearch()
+  }
+
+  /** One step up the drill-down: a unit's receipts → its client's units, or the units → the clients. */
+  const drillBack = () => {
+    if (pickedUnit) {
+      setPickedUnit(null)
+      restoreSearch(savedSearch.current.units)
+      return
+    }
+    if (pickedClient) {
+      setPickedClient(null)
+      restoreSearch(savedSearch.current.clients)
+    }
+  }
 
   // ── Form ────────────────────────────────────────────────────────────────
   const prefill = useRef(takePrefill())
@@ -194,11 +356,13 @@ export default function Receipts() {
   }, [searchInput])
 
   useEffect(() => {
+    if (level !== 'receipts') return
     let alive = true
     setLoading(true)
     setLoadError(null)
     fetchReceipts({
       search,
+      unitId: pickedUnit?.id,
       status: filter === 'الكل' ? undefined : filter === 'صالح' ? 'valid' : 'cancelled',
       page: page + 1,
       sort: sort ? SORT_FIELDS[sort.key] : undefined,
@@ -222,7 +386,88 @@ export default function Receipts() {
       alive = false
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [search, filter, page, sort, reloadKey])
+  }, [level, search, filter, page, sort, reloadKey, pickedUnit?.id])
+
+  // ── Data: the drill-down lists ──────────────────────────────────────────
+  /** Clients matching the search — the top level when searching by client. */
+  useEffect(() => {
+    if (level !== 'clients') return
+    let alive = true
+    setNavLoading(true)
+    setNavError(null)
+    fetchClients({ search, page: page + 1, sort: 'name', dir: 'asc' })
+      .then((result) => {
+        if (!alive) return
+        setClients(result.items)
+        setClientsMeta(result.meta)
+      })
+      .catch((err: unknown) => {
+        if (!alive) return
+        setClients([])
+        if (isAuthError(err)) return lostSession('انتهت الجلسة أو التوكن غير صالح. سجّل الدخول من جديد.')
+        setNavError(err instanceof Error ? err.message : 'تعذّر تحميل العملاء من الخادم')
+      })
+      .finally(() => {
+        if (alive) setNavLoading(false)
+      })
+    return () => {
+      alive = false
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [level, search, page, reloadKey])
+
+  /** Units matching the search — the top level when searching by unit. */
+  useEffect(() => {
+    if (level !== 'units' || pickedClient) return
+    let alive = true
+    setNavLoading(true)
+    setNavError(null)
+    fetchUnits({ search, page: page + 1, sort: 'name', dir: 'asc' })
+      .then((result) => {
+        if (!alive) return
+        setSearchUnits(result.items.map(unitRowOfApi))
+        setSearchUnitsMeta(result.meta)
+      })
+      .catch((err: unknown) => {
+        if (!alive) return
+        setSearchUnits([])
+        if (isAuthError(err)) return lostSession('انتهت الجلسة أو التوكن غير صالح. سجّل الدخول من جديد.')
+        setNavError(err instanceof Error ? err.message : 'تعذّر تحميل الوحدات من الخادم')
+      })
+      .finally(() => {
+        if (alive) setNavLoading(false)
+      })
+    return () => {
+      alive = false
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [level, pickedClient?.id, search, page, reloadKey])
+
+  /** The units a picked client holds, derived from every contract of that client. */
+  useEffect(() => {
+    if (level !== 'units' || !pickedClient) return
+    let alive = true
+    setNavLoading(true)
+    setNavError(null)
+    fetchClientContracts(pickedClient.id)
+      .then((list) => {
+        if (!alive) return
+        setClientUnits(unitRowsOfContracts(list))
+      })
+      .catch((err: unknown) => {
+        if (!alive) return
+        setClientUnits([])
+        if (isAuthError(err)) return lostSession('انتهت الجلسة أو التوكن غير صالح. سجّل الدخول من جديد.')
+        setNavError(err instanceof Error ? err.message : 'تعذّر تحميل عقود العميل')
+      })
+      .finally(() => {
+        if (alive) setNavLoading(false)
+      })
+    return () => {
+      alive = false
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [level, pickedClient?.id, reloadKey])
 
   // ── Data: active contracts (the picker) ─────────────────────────────────
   useEffect(() => {
@@ -552,6 +797,13 @@ export default function Receipts() {
       serialColumn('receipt', (r) => r.number),
       { key: 'date', header: 'التاريخ', value: (r) => day(r.paid_at), cell: (r) => <span className="tabular-nums">{fmtDate(day(r.paid_at))}</span> },
       { key: 'contract', header: 'العقد', sortable: false, value: (r) => r.contract_number ?? '', cell: (r) => r.contract_number ?? '—' },
+      {
+        key: 'unit',
+        header: 'الوحدة',
+        sortable: false,
+        value: (r) => [r.building_name, r.unit_name].filter(Boolean).join(' '),
+        cell: (r) => [r.building_name, r.unit_name].filter(Boolean).join(' ') || '—',
+      },
       { key: 'client', header: 'العميل', sortable: false, value: (r) => r.client_name ?? '', cell: (r) => <span className="font-semibold text-fg">{r.client_name ?? '—'}</span> },
       { key: 'for', header: 'الدفعة', sortable: false, value: (r) => receiptLabel(r) },
       { key: 'method', header: 'طريقة الدفع', sortable: false, value: (r) => r.payment_method_label ?? '—' },
@@ -571,6 +823,49 @@ export default function Receipts() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
   )
+
+  /** Clients matching the search: pick one to see the units they hold. */
+  const clientColumns = useMemo<Column<ApiClient>[]>(
+    () => [
+      { key: 'name', header: 'العميل', cell: (c) => <span className="font-semibold text-fg">{c.name}</span> },
+      {
+        key: 'phone',
+        header: 'الهاتف',
+        value: (c) => c.phone ?? '',
+        cell: (c) => (c.phone ? <span dir="ltr" className="tabular-nums">{c.phone}</span> : <span className="text-fg-3">—</span>),
+      },
+      {
+        key: 'national_id',
+        header: 'الرقم القومي',
+        value: (c) => c.national_id ?? '',
+        cell: (c) => (c.national_id ? <span dir="ltr" className="tabular-nums">{c.national_id}</span> : <span className="text-fg-3">—</span>),
+      },
+      { key: 'notes', header: 'ملاحظات', value: (c) => c.notes ?? '', cell: (c) => c.notes ?? <span className="text-fg-3">—</span> },
+    ],
+    [],
+  )
+
+  /** The units in the drill-down: a client's units, or the units matching a unit search. */
+  const unitColumns = useMemo<Column<UnitRow>[]>(() => {
+    const base: Column<UnitRow>[] = [
+      { key: 'building', header: 'العقار', sortable: false, value: (u) => u.building ?? '', cell: (u) => u.building ?? <span className="text-fg-3">—</span> },
+      { key: 'unit', header: 'الوحدة', sortable: false, value: (u) => u.name, cell: (u) => <span className="font-semibold text-fg">{u.name || '—'}</span> },
+      { key: 'type', header: 'النوع', sortable: false, value: (u) => u.type ?? '', cell: (u) => u.type ?? <span className="text-fg-3">—</span> },
+    ]
+    if (pickedClient) {
+      base.push(
+        { key: 'contract', header: 'العقد', sortable: false, value: (u) => u.contract ?? '', cell: (u) => u.contract ?? <span className="text-fg-3">—</span> },
+        { key: 'contract_date', header: 'تاريخ العقد', sortable: false, value: (u) => u.contractDate ?? '', cell: (u) => (u.contractDate ? <span className="tabular-nums">{fmtDate(u.contractDate)}</span> : <span className="text-fg-3">—</span>) },
+        { key: 'status', header: 'حالة العقد', sortable: false, value: (u) => u.status ?? '', cell: (u) => (u.status ? <StatusChip status={u.status} size="sm" /> : <span className="text-fg-3">—</span>) },
+      )
+    } else {
+      base.push(
+        { key: 'purpose', header: 'الغرض', sortable: false, value: (u) => u.purpose ?? '', cell: (u) => u.purpose ?? <span className="text-fg-3">—</span> },
+        { key: 'status', header: 'الحالة', sortable: false, value: (u) => u.status ?? '', cell: (u) => (u.status ? <StatusChip status={u.status} size="sm" /> : <span className="text-fg-3">—</span>) },
+      )
+    }
+    return base
+  }, [pickedClient])
 
   const receiptView = (r: ApiReceipt): RecordView => ({
     title: r.number,
@@ -645,6 +940,33 @@ export default function Receipts() {
     description: `${c.type === 'rent' ? 'إيجار' : 'بيع'} · ${[c.building_name, c.unit_name].filter(Boolean).join(' — ') || '—'}`,
     keywords: [c.client_name, c.unit_name, c.building_name].filter(Boolean).join(' '),
   }))
+
+  /* ── Drill-down: what the table shows and how to go back ────────────────── */
+  const drillPath = pickedUnit
+    ? [pickedClient?.name, unitLabel(pickedUnit)].filter(Boolean)
+    : pickedClient
+      ? [pickedClient.name]
+      : []
+  const backLabel = pickedUnit ? (pickedClient ? 'وحدات العميل' : 'نتائج الوحدات') : 'العملاء'
+
+  /** A client's units are already loaded, so the search box filters them locally. */
+  const shownClientUnits = useMemo(() => {
+    const q = normalizeSearch(search)
+    if (!q) return clientUnits
+    return clientUnits.filter((u) => matchesAll(normalizeSearch([unitLabel(u), u.contract, u.type, u.status].filter(Boolean).join(' ')), q))
+  }, [clientUnits, search])
+
+  /** The «أبحث عن» select shown next to the table's search box. */
+  const searchByControl = (
+    <Select
+      aria-label="أبحث عن طريق"
+      title="أبحث عن طريق"
+      options={SEARCH_BY_OPTIONS}
+      value={searchBy}
+      onChange={(event) => changeSearchBy(event.target.value as SearchBy)}
+      containerClassName="w-36 shrink-0"
+    />
+  )
 
   return (
     <div className="grid gap-4">
@@ -832,64 +1154,153 @@ export default function Receipts() {
         </div>
       </div>
 
-      <FilterChips
-        label="تصفية حسب حالة الإيصال"
-        options={FILTERS}
-        value={filter}
-        onChange={(v) => {
-          setFilter(v)
-          setPage(0)
-        }}
-      />
+      {level === 'receipts' && (
+        <FilterChips
+          label="تصفية حسب حالة الإيصال"
+          options={FILTERS}
+          value={filter}
+          onChange={(v) => {
+            setFilter(v)
+            setPage(0)
+          }}
+        />
+      )}
 
-      {loadError && (
+      {drillPath.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 rounded-card border border-hairline bg-neutral-soft px-3 py-2 t-caption">
+          <Btn variant="ghost" size="sm" iconStart={<IconChevronPrev size={14} />} onClick={drillBack}>
+            {backLabel}
+          </Btn>
+          <span className="text-fg-3">مسار البحث:</span>
+          <span className="font-semibold text-fg">{drillPath.join(' › ')}</span>
+        </div>
+      )}
+
+      {(level === 'receipts' ? loadError : navError) && (
         <div className="flex flex-wrap items-center justify-between gap-2 rounded-card border border-warning/40 bg-warning-soft px-4 py-2.5 t-caption text-fg-2">
-          <span>{loadError}</span>
+          <span>{level === 'receipts' ? loadError : navError}</span>
           <Btn size="sm" variant="glass" onClick={reload}>
             إعادة المحاولة
           </Btn>
         </div>
       )}
 
-      <DataTable
-        rows={rows}
-        columns={columns}
-        rowKey={(r) => String(r.id)}
-        title={
-          <div className="flex items-center gap-2">
-            <span className="font-semibold text-fg">الإيصالات السابقة</span>
-            <Btn
-              variant="ghost"
-              size="sm"
-              onClick={() => void logout()}
-            >
-              خروج
-            </Btn>
-          </div>
-        }
-        caption="الإيصالات السابقة"
-        loading={loading}
-        searchPlaceholder="ابحث برقم الإيصال أو العميل أو العقد…"
-        serverSearch={{ value: searchInput, onChange: setSearchInput }}
-        serverSort={{ value: sort, onChange: (s) => { setSort(s); setPage(0) } }}
-        serverPagination={{ page, pageCount: meta.last_page, total: meta.total, from: meta.from ?? 0, to: meta.to ?? 0, onChange: setPage }}
-        exportName="إيصالات-القبض"
-        actionsWidth="8rem"
-        detail={receiptView}
-        actions={(r) => (
-          <div className="flex items-center justify-end gap-1">
-            <Btn size="sm" variant="ghost" onClick={() => printReceipt(r)}>
-              طباعة
-            </Btn>
-            {r.status === 'valid' && (
-              <Btn size="sm" variant="ghost" className="text-danger" onClick={() => void confirmCancel(r)} title="إلغاء الإيصال">
-                <IconTrash size={16} />
+      {level === 'clients' ? (
+        <>
+          <p className="t-caption px-1 text-fg-3">اضغط على العميل لعرض الوحدات المملوكة له، ثم على الوحدة لعرض إيصالاتها.</p>
+          <DataTable<ApiClient>
+            rows={clients}
+            columns={clientColumns}
+            rowKey={(c) => String(c.id)}
+            title={<span className="font-semibold text-fg">العملاء</span>}
+            caption="العملاء"
+            loading={navLoading}
+            searchPlaceholder="ابحث بالاسم أو الهاتف أو الرقم القومي…"
+            searchAside={searchByControl}
+            serverSearch={{ value: searchInput, onChange: setSearchInput }}
+            serverPagination={{
+              page,
+              pageCount: clientsMeta.last_page,
+              total: clientsMeta.total,
+              from: clientsMeta.from ?? 0,
+              to: clientsMeta.to ?? 0,
+              onChange: setPage,
+            }}
+            exportName="العملاء"
+            actionsWidth="6rem"
+            onRowClick={drillToClient}
+            actions={(c) => (
+              <Btn size="sm" variant="ghost" onClick={() => drillToClient(c)} title="وحدات العميل">
+                الوحدات
               </Btn>
             )}
-          </div>
-        )}
-        emptyText="لا توجد إيصالات بعد."
-      />
+            emptyText="لا يوجد عملاء مطابقون للبحث."
+          />
+        </>
+      ) : level === 'units' ? (
+        <>
+          <p className="t-caption px-1 text-fg-3">اضغط على الوحدة لعرض كل إيصالات الدفع الخاصة بها.</p>
+          <DataTable<UnitRow>
+            rows={pickedClient ? shownClientUnits : searchUnits}
+            columns={unitColumns}
+            rowKey={(u) => String(u.id)}
+            title={
+              <span className="font-semibold text-fg">
+                {pickedClient ? `وحدات ${pickedClient.name}` : 'الوحدات'}
+              </span>
+            }
+            caption={pickedClient ? 'وحدات العميل' : 'الوحدات'}
+            loading={navLoading}
+            searchPlaceholder={pickedClient ? 'ابحث في وحدات العميل…' : 'ابحث باسم العقار أو رقم الوحدة…'}
+            searchAside={searchByControl}
+            serverSearch={{ value: searchInput, onChange: setSearchInput }}
+            serverPagination={
+              pickedClient
+                ? undefined
+                : {
+                    page,
+                    pageCount: searchUnitsMeta.last_page,
+                    total: searchUnitsMeta.total,
+                    from: searchUnitsMeta.from ?? 0,
+                    to: searchUnitsMeta.to ?? 0,
+                    onChange: setPage,
+                  }
+            }
+            exportName="الوحدات"
+            actionsWidth="6rem"
+            onRowClick={drillToUnit}
+            actions={(u) => (
+              <Btn size="sm" variant="ghost" onClick={() => drillToUnit(u)} title="إيصالات الوحدة">
+                الإيصالات
+              </Btn>
+            )}
+            emptyText={pickedClient ? 'لا توجد وحدات مسجّلة لهذا العميل.' : 'لا توجد وحدات مطابقة للبحث.'}
+          />
+        </>
+      ) : (
+        <DataTable<ApiReceipt>
+          rows={rows}
+          columns={columns}
+          rowKey={(r) => String(r.id)}
+          title={
+            <div className="flex items-center gap-2">
+              <span className="font-semibold text-fg">{pickedUnit ? 'إيصالات الوحدة' : 'الإيصالات السابقة'}</span>
+              <Btn variant="ghost" size="sm" onClick={() => void logout()}>
+                خروج
+              </Btn>
+            </div>
+          }
+          caption={pickedUnit ? 'إيصالات الوحدة' : 'الإيصالات السابقة'}
+          loading={loading}
+          searchPlaceholder={pickedUnit ? 'ابحث في إيصالات هذه الوحدة…' : 'ابحث برقم الإيصال أو العميل أو العقد…'}
+          searchAside={searchByControl}
+          serverSearch={{ value: searchInput, onChange: setSearchInput }}
+          serverSort={{
+            value: sort,
+            onChange: (s) => {
+              setSort(s)
+              setPage(0)
+            },
+          }}
+          serverPagination={{ page, pageCount: meta.last_page, total: meta.total, from: meta.from ?? 0, to: meta.to ?? 0, onChange: setPage }}
+          exportName="إيصالات-القبض"
+          actionsWidth="8rem"
+          detail={receiptView}
+          actions={(r) => (
+            <div className="flex items-center justify-end gap-1">
+              <Btn size="sm" variant="ghost" onClick={() => printReceipt(r)}>
+                طباعة
+              </Btn>
+              {r.status === 'valid' && (
+                <Btn size="sm" variant="ghost" className="text-danger" onClick={() => void confirmCancel(r)} title="إلغاء الإيصال">
+                  <IconTrash size={16} />
+                </Btn>
+              )}
+            </div>
+          )}
+          emptyText={pickedUnit ? 'لا توجد إيصالات على هذه الوحدة.' : 'لا توجد إيصالات بعد.'}
+        />
+      )}
 
       <Modal
         open={cancelTarget !== null}

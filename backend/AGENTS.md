@@ -122,7 +122,8 @@ must stay easy to change and be listed in `docs/DEFAULTS.md`.
   paid_at, method, reference, total, status) groups the payment lines through the nullable
   `installment_payments.receipt_id` / `contract_down_payments.receipt_id`, so one receipt covers several
   installments and/or part of the down payment. Endpoints:
-  `GET /admin/receipts` (search/status/contract/client/method/date filters, sort, paging),
+  `GET /admin/receipts` (search/status/contract/client/**unit**/method/date filters, sort, paging — `unit_id` lists every
+  receipt ever collected on that unit, whichever client paid, because a unit may be resold),
   `GET /admin/receipts/{receipt}`, `POST /admin/receipts`, `POST /admin/receipts/{receipt}/cancel`.
   Permissions reused: list/show = `contracts.view`, create = `payments.create`, cancel = `payments.cancel`.
   Only active contracts collect money — the guard sits in `InstallmentService::recordPayment`, so it covers the

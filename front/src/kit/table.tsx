@@ -166,6 +166,11 @@ export type DataTableProps<T> = {
   searchable?: boolean
   searchPlaceholder?: string
   /**
+   * A control placed next to the search box (e.g. a «search by» select). The table only renders it;
+   * the caller owns its value.
+   */
+  searchAside?: ReactNode
+  /**
    * Server-side search: when set, the table doesn't filter locally and shows this value in the search
    * box. Use with `serverPagination` so the caller controls paging and refetches.
    */
@@ -249,6 +254,7 @@ export function DataTable<T>({
   toolbar,
   searchable = true,
   searchPlaceholder = 'ابحث في الجدول…',
+  searchAside,
   serverSearch,
   serverPagination,
   serverSort,
@@ -463,6 +469,7 @@ export function DataTable<T>({
             containerClassName="min-w-[14rem] flex-1 sm:max-w-sm"
           />
         )}
+        {searchAside}
         <div className="ms-auto flex flex-wrap items-center gap-2">
           {toolbar}
           {exportName !== false && (

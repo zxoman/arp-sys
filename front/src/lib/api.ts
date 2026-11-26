@@ -1190,6 +1190,14 @@ export async function fetchActiveContracts(): Promise<ApiContract[]> {
   return fetchAllPages((page) => fetchContracts({ status: 'active', page, perPage: 100, sort: 'created_at', dir: 'desc' }))
 }
 
+/**
+ * Every contract of one client (pages through `GET /admin/contracts?client_id=`), so the receipts page
+ * can list the units a client holds before drilling into a unit's receipts.
+ */
+export async function fetchClientContracts(clientId: number): Promise<ApiContract[]> {
+  return fetchAllPages((page) => fetchContracts({ clientId, page, perPage: 100, sort: 'contract_date', dir: 'desc' }))
+}
+
 /* ------------------------------------------------------------------
  * Receipts (إيصالات القبض)
  * ------------------------------------------------------------------ */
@@ -1297,6 +1305,8 @@ export async function fetchReceipts(
     search?: string
     contractId?: number
     clientId?: number
+    /** Every receipt collected on that unit (it may have been resold). */
+    unitId?: number
     status?: 'valid' | 'cancelled'
     paymentMethod?: string
     from?: string
@@ -1311,6 +1321,7 @@ export async function fetchReceipts(
   if (params.search) query.set('search', params.search)
   if (params.contractId) query.set('contract_id', String(params.contractId))
   if (params.clientId) query.set('client_id', String(params.clientId))
+  if (params.unitId) query.set('unit_id', String(params.unitId))
   if (params.status) query.set('status', params.status)
   if (params.paymentMethod) query.set('payment_method', params.paymentMethod)
   if (params.from) query.set('from', params.from)

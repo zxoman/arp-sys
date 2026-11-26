@@ -613,6 +613,53 @@ class UnitTest extends TestCase
             ->assertJsonCount(2, 'data');
     }
 
+    /** Search matches the unit number and its building's name, so «A 122» works. */
+    public function test_units_index_searches_by_unit_and_building_name(): void
+    {
+        $admin = $this->createAdmin();
+        $headers = $this->authHeaders($admin['token']);
+
+        foreach ([['A', ['122', '130']], ['B', ['5']]] as [$name, $units]) {
+            $building = $this->createBuildingWithActivities(['name' => $name, 'number' => 'N'.$name]);
+            $floor = Floor::create([
+                'building_id' => $building->id,
+                'floor_number' => 1,
+                'display_name' => 'الأول',
+                'units_count' => 0,
+            ]);
+            foreach ($units as $unit) {
+                $this->withHeaders($headers)
+                    ->postJson('/api/v1/admin/units', [
+                        'building_id' => $building->id,
+                        'floor_id' => $floor->id,
+                        'name' => $unit,
+                        'type' => 'apartment',
+                        'area' => 100.00,
+                        'purpose' => 'both',
+                    ])
+                    ->assertStatus(201);
+            }
+        }
+
+        $this->withHeaders($headers)
+            ->getJson('/api/v1/admin/units?search='.urlencode('A 122'))
+            ->assertOk()
+            ->assertJsonCount(1, 'data')
+            ->assertJsonPath('data.0.name', '122')
+            ->assertJsonPath('data.0.building_name', 'A');
+
+        $this->withHeaders($headers)
+            ->getJson('/api/v1/admin/units?search=A')
+            ->assertOk()
+            ->assertJsonCount(2, 'data');
+
+        $this->withHeaders($headers)
+            ->getJson('/api/v1/admin/units?search=122')
+            ->assertOk()
+            ->assertJsonCount(1, 'data')
+            ->assertJsonPath('data.0.name', '122');
+    }
+
     /** The index paginates like buildings: `per_page` (max 100) plus a `meta` block. */
     public function test_units_index_returns_pagination_meta(): void
     {

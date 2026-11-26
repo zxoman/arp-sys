@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Enums\Permission;
 use App\Models\Building;
 use App\Models\BuildingActivity;
 use App\Models\Client;
@@ -30,7 +31,7 @@ class ReceiptTest extends TestCase
         parent::setUp();
 
         $role = Role::create(['name' => 'admin', 'is_admin' => true]);
-        foreach (\App\Enums\Permission::all() as $permission) {
+        foreach (Permission::all() as $permission) {
             RolePermission::firstOrCreate(['role_id' => $role->id, 'permission' => $permission]);
         }
 
@@ -51,7 +52,7 @@ class ReceiptTest extends TestCase
 
     private function headers(): array
     {
-        return ['Authorization' => 'Bearer ' . $this->token];
+        return ['Authorization' => 'Bearer '.$this->token];
     }
 
     private static int $sequence = 0;
@@ -61,8 +62,8 @@ class ReceiptTest extends TestCase
         $n = ++self::$sequence;
 
         $building = Building::create([
-            'name' => 'Building ' . $n,
-            'number' => 'B' . $n,
+            'name' => 'Building '.$n,
+            'number' => 'B'.$n,
             'type' => 'building',
             'area' => 1000,
             'floors_count' => 3,
@@ -79,7 +80,7 @@ class ReceiptTest extends TestCase
         return Unit::create([
             'building_id' => $building->id,
             'floor_id' => $floor->id,
-            'name' => 'Unit ' . $n,
+            'name' => 'Unit '.$n,
             'type' => 'apartment',
             'activity' => 'residential',
             'purpose' => 'both',
@@ -93,7 +94,7 @@ class ReceiptTest extends TestCase
     /** An active contract with three 10,000 installments and a 30,000 down payment. */
     private function contract(): Contract
     {
-        $client = Client::create(['name' => 'Client ' . ++self::$sequence, 'phone' => '+201000000' . random_int(100, 999)]);
+        $client = Client::create(['name' => 'Client '.++self::$sequence, 'phone' => '+201000000'.random_int(100, 999)]);
 
         $id = $this->withHeaders($this->headers())->postJson('/api/v1/admin/contracts', [
             'type' => 'sale',
@@ -328,7 +329,7 @@ class ReceiptTest extends TestCase
             'installments' => [['installment_id' => $installment->id, 'amount' => 1000]],
         ])->assertStatus(201);
 
-        $list = $this->withHeaders($this->headers())->getJson('/api/v1/admin/receipts?search=' . $contract->number);
+        $list = $this->withHeaders($this->headers())->getJson('/api/v1/admin/receipts?search='.$contract->number);
         $list->assertStatus(200);
         $list->assertJsonCount(1, 'data');
         $list->assertJsonPath('data.0.contract_number', $contract->number);
@@ -337,12 +338,44 @@ class ReceiptTest extends TestCase
         // Searching by the receipt number itself works too.
         $number = $list->json('data.0.number');
         $this->withHeaders($this->headers())
-            ->getJson('/api/v1/admin/receipts?search=' . $number)
+            ->getJson('/api/v1/admin/receipts?search='.$number)
             ->assertStatus(200)
             ->assertJsonCount(1, 'data');
 
         $this->withHeaders($this->headers())
             ->getJson('/api/v1/admin/receipts?search=لا-يوجد-إيصال')
+            ->assertStatus(200)
+            ->assertJsonCount(0, 'data');
+    }
+
+    public function test_receipts_index_filters_by_unit_and_client(): void
+    {
+        $first = $this->contract();
+        $second = $this->contract();
+
+        $this->withHeaders($this->headers())->postJson('/api/v1/admin/receipts', [
+            'contract_id' => $first->id,
+            'paid_at' => '2026-02-05',
+            'installments' => [['installment_id' => $first->installments()->orderBy('sequence_number')->first()->id, 'amount' => 1000]],
+        ])->assertStatus(201);
+
+        $this->withHeaders($this->headers())->postJson('/api/v1/admin/receipts', [
+            'contract_id' => $second->id,
+            'paid_at' => '2026-02-06',
+            'installments' => [['installment_id' => $second->installments()->orderBy('sequence_number')->first()->id, 'amount' => 2000]],
+        ])->assertStatus(201);
+
+        // The unit drill-down lists every receipt ever collected on that unit, whichever client paid.
+        $byUnit = $this->withHeaders($this->headers())->getJson('/api/v1/admin/receipts?unit_id='.$first->unit_id);
+        $byUnit->assertStatus(200)->assertJsonCount(1, 'data');
+        $byUnit->assertJsonPath('data.0.contract_number', $first->number);
+
+        $byClient = $this->withHeaders($this->headers())->getJson('/api/v1/admin/receipts?client_id='.$second->client_id);
+        $byClient->assertStatus(200)->assertJsonCount(1, 'data');
+        $byClient->assertJsonPath('data.0.contract_number', $second->number);
+
+        $this->withHeaders($this->headers())
+            ->getJson('/api/v1/admin/receipts?unit_id='.$first->unit_id.'&client_id='.$second->client_id)
             ->assertStatus(200)
             ->assertJsonCount(0, 'data');
     }

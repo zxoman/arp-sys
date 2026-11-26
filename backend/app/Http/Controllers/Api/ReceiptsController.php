@@ -43,6 +43,10 @@ class ReceiptsController extends Controller
         if ($clientId = request('client_id')) {
             $query->whereHas('contract', fn ($q) => $q->where('client_id', $clientId));
         }
+        if ($unitId = request('unit_id')) {
+            // A unit may be resold, so this lists every receipt ever collected on it, whoever paid.
+            $query->whereHas('contract', fn ($q) => $q->where('unit_id', $unitId));
+        }
         if ($search = trim((string) request('search'))) {
             // The page searches by receipt number, contract number, client or unit.
             $query->where(function ($q) use ($search) {
