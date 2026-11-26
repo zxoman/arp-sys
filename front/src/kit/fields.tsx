@@ -1070,9 +1070,15 @@ export function DatePicker({
             // Typing over a date should replace it, not append to it.
             if (draft == null && value != null) event.currentTarget.select()
           }}
-          onClick={() => {
-            if (open) setOpen(false)
-            else openCalendar()
+          onClick={(event) => {
+            if (open) {
+              setOpen(false)
+            } else {
+              openCalendar()
+              // A mouse click collapses the focus selection, so select the date again here:
+              // typing a new date replaces the old one instead of appending to it.
+              event.currentTarget.select()
+            }
           }}
           onKeyDown={onKeyDown}
           onBlur={() => {
