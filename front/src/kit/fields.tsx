@@ -977,7 +977,14 @@ export function DatePicker({
       setCursor(moves[event.key]())
     } else if (event.key === 'Enter') {
       event.preventDefault()
-      pick(cursor)
+      // A typed date wins over the calendar cursor; an incomplete one shows its error instead.
+      if (draft != null && draft.trim() !== '') {
+        const iso = parseDMY(draft)
+        if (iso && inRange(iso)) pick(iso)
+        else commit(draft)
+      } else {
+        pick(cursor)
+      }
     } else if (event.key === 'Escape') {
       event.preventDefault()
       event.stopPropagation()
@@ -1059,7 +1066,14 @@ export function DatePicker({
           className="field-control kit-tabular"
           value={draft ?? formatDMY(value)}
           onChange={(event) => onInput(event.target.value)}
-          onClick={openCalendar}
+          onFocus={(event) => {
+            // Typing over a date should replace it, not append to it.
+            if (draft == null && value != null) event.currentTarget.select()
+          }}
+          onClick={() => {
+            if (open) setOpen(false)
+            else openCalendar()
+          }}
           onKeyDown={onKeyDown}
           onBlur={() => {
             if (draft != null) commit(draft)
