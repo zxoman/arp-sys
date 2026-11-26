@@ -859,11 +859,14 @@ export function DatePicker({
   const fieldId = useFieldId(id)
   const calendarId = `${fieldId}-calendar`
   const shellRef = useRef<HTMLDivElement>(null)
+  const popoverRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const [open, setOpen] = useState(false)
   const [draft, setDraft] = useState<string | null>(null)
   const [problem, setProblem] = useState<'format' | 'range' | null>(null)
   const [cursor, setCursor] = useState<ISODate>(value ?? today)
+  /** Which panel the popover shows: the day grid or the month picker. */
+  const [view, setView] = useState<'days' | 'months'>('days')
   const position = useAnchoredPopover(shellRef, open, 380, 300)
 
   // An external value change (or our own commit) replaces any in-progress text.
@@ -872,12 +875,34 @@ export function DatePicker({
     setProblem(null)
   }, [value])
 
+  // A click anywhere outside the field and the popover closes the calendar. Blur alone misses
+  // clicks on plain elements that never take focus.
+  useEffect(() => {
+    if (!open) return
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node | null
+      if (!target) return
+      if (shellRef.current?.contains(target) || popoverRef.current?.contains(target)) return
+      setOpen(false)
+    }
+    document.addEventListener('pointerdown', onPointerDown, true)
+    return () => document.removeEventListener('pointerdown', onPointerDown, true)
+  }, [open])
+
   const inRange = (iso: ISODate) => (!min || iso >= min) && (!max || iso <= max)
 
   function openCalendar() {
     if (disabled || open) return
     setCursor(value ?? (inRange(today) ? today : (min ?? max ?? today)))
+    setView('days')
     setOpen(true)
+  }
+
+  /** Jump to a month in the cursor's year, keeping the day when that month is long enough. */
+  function moveToMonth(index: number) {
+    const day = Math.min(Number(cursor.slice(8)), new Date(Number(cursor.slice(0, 4)), index + 1, 0).getDate())
+    setCursor(`${pad(Number(cursor.slice(0, 4)), 4)}-${pad(index + 1)}-${pad(day)}`)
+    setView('days')
   }
 
   function pick(iso: ISODate) {
@@ -922,6 +947,20 @@ export function DatePicker({
         openCalendar()
       } else if (event.key === 'Enter' && draft != null) {
         commit(draft)
+      }
+      return
+    }
+    // In the month picker only Escape/Tab/Enter matter; arrows would move days nobody can see.
+    if (view === 'months') {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        event.stopPropagation()
+        setOpen(false)
+      } else if (event.key === 'Tab') {
+        setOpen(false)
+      } else if (event.key === 'Enter') {
+        event.preventDefault()
+        setView('days')
       }
       return
     }
@@ -1033,6 +1072,7 @@ export function DatePicker({
         position &&
         createPortal(
           <div
+            ref={popoverRef}
             id={calendarId}
             role="dialog"
             aria-label="اختيار التاريخ"
@@ -1046,49 +1086,81 @@ export function DatePicker({
                 type="button"
                 tabIndex={-1}
                 className="kit-field-btn"
-                aria-label="الشهر السابق"
-                onClick={() => setCursor(addMonths(cursor, -1))}
+                aria-label={view === 'days' ? 'الشهر السابق' : 'السنة السابقة'}
+                onClick={() => setCursor(addMonths(cursor, view === 'days' ? -1 : -12))}
               >
                 <IconChevronPrev size={16} />
               </button>
-              <p className="t-label" aria-live="polite">
-                {MONTHS[month - 1]} {year}
-              </p>
+              {view === 'days' ? (
+                <button
+                  type="button"
+                  tabIndex={-1}
+                  className="kit-cal-title"
+                  aria-label="اختيار الشهر والسنة"
+                  title="اختيار الشهر والسنة"
+                  onClick={() => setView('months')}
+                >
+                  {MONTHS[month - 1]} {year}
+                </button>
+              ) : (
+                <p className="t-label" aria-live="polite">
+                  {year}
+                </p>
+              )}
               <button
                 type="button"
                 tabIndex={-1}
                 className="kit-field-btn"
-                aria-label="الشهر التالي"
-                onClick={() => setCursor(addMonths(cursor, 1))}
+                aria-label={view === 'days' ? 'الشهر التالي' : 'السنة التالية'}
+                onClick={() => setCursor(addMonths(cursor, view === 'days' ? 1 : 12))}
               >
                 <IconChevronNext size={16} />
               </button>
             </div>
-            <div className="kit-cal-grid" role="grid" aria-label={`${MONTHS[month - 1]} ${year}`}>
-              {WEEKDAYS.map((day) => (
-                <span key={day} role="columnheader" className="t-caption py-1 text-center">
-                  {day}
-                </span>
-              ))}
-              {cells.map((iso) => (
-                <button
-                  key={iso}
-                  type="button"
-                  role="gridcell"
-                  tabIndex={-1}
-                  className="kit-cal-day"
-                  aria-label={longDate(iso)}
-                  aria-selected={iso === value}
-                  data-today={iso === today || undefined}
-                  data-outside={iso.slice(5, 7) !== pad(month) || undefined}
-                  data-active={iso === cursor || undefined}
-                  disabled={!inRange(iso)}
-                  onClick={() => pick(iso)}
-                >
-                  {Number(iso.slice(8))}
-                </button>
-              ))}
-            </div>
+            {view === 'days' ? (
+              <div className="kit-cal-grid" role="grid" aria-label={`${MONTHS[month - 1]} ${year}`}>
+                {WEEKDAYS.map((day) => (
+                  <span key={day} role="columnheader" className="t-caption py-1 text-center">
+                    {day}
+                  </span>
+                ))}
+                {cells.map((iso) => (
+                  <button
+                    key={iso}
+                    type="button"
+                    role="gridcell"
+                    tabIndex={-1}
+                    className="kit-cal-day"
+                    aria-label={longDate(iso)}
+                    aria-selected={iso === value}
+                    data-today={iso === today || undefined}
+                    data-outside={iso.slice(5, 7) !== pad(month) || undefined}
+                    data-active={iso === cursor || undefined}
+                    disabled={!inRange(iso)}
+                    onClick={() => pick(iso)}
+                  >
+                    {Number(iso.slice(8))}
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <div className="kit-cal-months" role="grid" aria-label={`شهور ${year}`}>
+                {MONTHS.map((name, index) => (
+                  <button
+                    key={name}
+                    type="button"
+                    role="gridcell"
+                    tabIndex={-1}
+                    className="kit-cal-month"
+                    aria-label={name}
+                    aria-selected={index === month - 1}
+                    onClick={() => moveToMonth(index)}
+                  >
+                    {name}
+                  </button>
+                ))}
+              </div>
+            )}
             <div className="mt-2 flex items-center justify-between border-t border-hairline pt-2">
               <Btn variant="ghost" size="sm" tabIndex={-1} disabled={!inRange(today)} onClick={() => pick(today)}>
                 اليوم

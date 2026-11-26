@@ -262,6 +262,42 @@
     cursor: not-allowed;
     opacity: 0.28;
   }
+  .kit-cal-title {
+    border: 0;
+    border-radius: 10px;
+    background: transparent;
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 700;
+    padding: 4px 10px;
+    cursor: pointer;
+  }
+  .kit-cal-title:hover {
+    background: var(--menu-hover);
+  }
+  .kit-cal-months {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 4px;
+  }
+  .kit-cal-month {
+    height: 40px;
+    border: 0;
+    border-radius: 10px;
+    background: transparent;
+    color: var(--text);
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .kit-cal-month:hover,
+  .kit-cal-month[data-active='true'] {
+    background: var(--menu-hover);
+  }
+  .kit-cal-month[aria-selected='true'] {
+    background: linear-gradient(135deg, var(--primary), var(--primary-2));
+    color: #fff;
+    font-weight: 700;
+  }
 
   /* ---------------------------------------------------------------- Overlays */
   .kit-layer {
